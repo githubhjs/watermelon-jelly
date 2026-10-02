@@ -8,12 +8,13 @@ CDN `<script type="importmap">`, no build step, no bundler.
 
 ## What it does
 
-- A real 3D soft-body physics simulation deforms a rounded, subdivided box mesh (Three.js
-  `RoundedBoxGeometry`) — drag the jelly and the mesh stretches toward your pointer; let go and
-  it springs back home. Tap/click without dragging to poke it instead.
+- A real 3D soft-body physics simulation deforms a rounded wedge mesh — a genuine watermelon-slice
+  cross-section (a curved rind arc tapering to a rounded tip, built as a `THREE.Shape`) extruded
+  into a prism with `THREE.ExtrudeGeometry` — drag the jelly and the mesh stretches toward your
+  pointer; let go and it springs back home. Tap/click without dragging to poke it instead.
 - Watermelon coloring (green skin, white rind, red/pink/orange flesh) is painted per-vertex from
-  each vertex's height, not a texture — it deforms naturally with the jelly since it's baked into
-  the mesh data itself.
+  each vertex's position relative to the wedge's own 2D cross-section outline, not a texture — it
+  deforms naturally with the jelly since it's baked into the mesh data itself.
 - `MeshPhysicalMaterial` (`transmission`/`thickness`/`clearcoat`) gives it a glossy, faintly
   translucent, candy-like look; a procedural `RoomEnvironment` provides soft studio lighting with
   no external HDRI file needed.
@@ -30,10 +31,10 @@ CDN `<script type="importmap">`, no build step, no bundler.
 
 - [Three.js](https://threejs.org/) r186, loaded via an import map pointing at jsDelivr — no local
   install, no bundler.
-- Official Three.js addons: `OrbitControls`, `RoundedBoxGeometry`, `BufferGeometryUtils`
-  (`mergeVertices`, so the subdivided box shares vertices across faces instead of duplicating them
-  per-face — required for the jelly deformation to look continuous instead of seamed), and
-  `RoomEnvironment` for the lighting environment.
+- Official Three.js addons: `OrbitControls`, `BufferGeometryUtils` (`mergeVertices`, so the
+  extruded wedge shares vertices across faces instead of duplicating them per-face — required for
+  the jelly deformation to look continuous instead of seamed), and `RoomEnvironment` for the
+  lighting environment.
 - The jelly physics itself (structural distance constraints between mesh edges + a per-vertex pull
   back toward its own rest position, with damping) is hand-written — there isn't a drop-in
   "jelly" package for this, but the technique is a standard, well-known one for squishy meshes.

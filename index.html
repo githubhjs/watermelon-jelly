@@ -203,7 +203,6 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
@@ -220,12 +219,12 @@ stage.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 50);
-camera.position.set(0, 1.35, 5.4);
+camera.position.set(3.0, 1.1, 8.6);
 
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
-const key = new THREE.DirectionalLight(0xfff3e6, 1.7);
+const key = new THREE.DirectionalLight(0xfff3e6, 1.4);
 key.position.set(2.2, 3.4, 2.6);
 key.castShadow = true;
 key.shadow.mapSize.set(1024,1024);
@@ -243,7 +242,7 @@ const plate = new THREE.Mesh(
   new THREE.MeshStandardMaterial({ color:0xfbf6ee, roughness:0.9, metalness:0 })
 );
 plate.rotation.x = -Math.PI/2;
-plate.position.y = -0.62;
+plate.position.y = -1.55;
 plate.receiveShadow = true;
 scene.add(plate);
 
@@ -252,7 +251,7 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.enablePan = false;
-controls.minDistance = 3.2; controls.maxDistance = 8;
+controls.minDistance = 5; controls.maxDistance = 16;
 controls.minPolarAngle = 0.35; controls.maxPolarAngle = Math.PI*0.52;
 controls.autoRotate = true;
 controls.autoRotateSpeed = 0.6;
@@ -266,12 +265,51 @@ function resize(){
 }
 window.addEventListener('resize', resize);
 
-// ---------- build the jelly mesh (a rounded, subdivided box) ----------
-const SIZE = { x:1.9, y:1.05, z:1.35 };
-const SEGMENTS = 7;
-const RADIUS = 0.30;
+// ---------- build the jelly mesh: a rounded triangular wedge, extruded
+// along a depth axis -- a real watermelon-slice cross-section (a curved
+// rind arc tapering to a rounded tip), not a plain box. This is what the
+// reference material actually was: the same wedge object, just seen from
+// different camera angles (end-on it reads as a tapering block; from the
+// side it reads as the classic flat wedge silhouette). ----------
+function buildWedgeOutline2D(){
+  const pts = [];
+  const archalf = 58*Math.PI/180, archN = 16;
+  for (let i=0;i<=archN;i++){
+    const t = -archalf + (2*archalf)*(i/archN);
+    pts.push({x:Math.sin(t), y:Math.cos(t), isArc:true}); // rind arc, curving over the top
+  }
+  const archEnd = pts[pts.length-1];
+  const tip = {x:0, y:-1.28};
+  pts.push({x:archEnd.x*0.62, y:archEnd.y*0.25+tip.y*0.55, isArc:false});
+  pts.push({x:0.07, y:tip.y*0.97, isArc:false});
+  pts.push({x:0,    y:tip.y,     isArc:false});
+  pts.push({x:-0.07,y:tip.y*0.97, isArc:false});
+  const archStart = pts[0];
+  pts.push({x:archStart.x*0.62, y:archStart.y*0.25+tip.y*0.55, isArc:false});
+  return pts;
+}
+const outline2D = buildWedgeOutline2D();
 
-let geo = new RoundedBoxGeometry(SIZE.x, SIZE.y, SIZE.z, SEGMENTS, RADIUS);
+const SCALE3D = 1.3;
+const DEPTH = 1.55;
+const shape = new THREE.Shape();
+shape.moveTo(outline2D[0].x, outline2D[0].y);
+for (let i=1;i<outline2D.length;i++) shape.lineTo(outline2D[i].x, outline2D[i].y);
+shape.closePath();
+
+let geo = new THREE.ExtrudeGeometry(shape, {
+  depth: DEPTH, bevelEnabled:true, bevelThickness:0.08, bevelSize:0.08,
+  bevelSegments:5, steps:10, curveSegments:1,
+});
+geo.translate(0, 0, -DEPTH/2);
+geo.computeBoundingBox();
+let centerX = 0, centerY = 0;
+{
+  const bb = geo.boundingBox;
+  centerX = (bb.max.x+bb.min.x)/2; centerY = (bb.max.y+bb.min.y)/2;
+  geo.translate(-centerX, -centerY, 0);
+}
+geo.scale(SCALE3D, SCALE3D, SCALE3D);
 geo = mergeVertices(geo, 1e-4);
 geo.computeVertexNormals();
 
@@ -280,28 +318,41 @@ const restPos = Float32Array.from(posAttr.array); // qx,qy,qz per vertex (local,
 const VN = posAttr.count;
 const vel = new Float32Array(VN*3);
 
-// vertex colors: flesh (pink/red) in face interiors, rind (green/white) near
-// the rounded fillet regions (computed once from each vertex's rest position).
+// Find the nearest point on the wedge's own 2D cross-section outline for
+// any (x,y) -- this is what decides rind vs. flesh, regardless of depth,
+// so the rind shows correctly on the end caps too, not just the side.
+const outlineScaled = outline2D.map(p=>({x:(p.x-centerX)*SCALE3D, y:(p.y-centerY)*SCALE3D, isArc:p.isArc}));
+function nearestOutline(x,y){
+  let best=Infinity, isArc=false;
+  for (const p of outlineScaled){
+    const d = Math.hypot(x-p.x, y-p.y);
+    if (d<best){ best=d; isArc=p.isArc; }
+  }
+  return {dist:best, isArc};
+}
+
 const colors = new Float32Array(VN*3);
-const hx=SIZE.x/2, hy=SIZE.y/2, hz=SIZE.z/2;
-// Band by height, like a real wedge: a green-skin stripe along the very top,
-// a thin white rind just under it, then flesh color for the rest of the
-// block. Simple, one axis, and the band width is a direct, predictable
-// fraction of the object's height instead of an indirect multi-axis guess.
 function paint(hueShift){
   const fleshA = new THREE.Color().setHSL(((352+hueShift)%360)/360, 0.82, 0.58);
   const fleshB = new THREE.Color().setHSL(((352+hueShift)%360)/360, 0.86, 0.40);
   const rindGreen = new THREE.Color().setHSL(122/360, 0.55, 0.22);
-  const rindWhite = new THREE.Color().setHSL(90/360, 0.30, 0.92);
-  const GREEN_FROM = 0.80, WHITE_FROM = 0.62; // fraction of full height (y/hy*0.5+0.5)
+  const rindWhite = new THREE.Color().setHSL(90/360, 0.20, 0.97);
+  // Clean, distinct bands (not one smooth continuous blend formula, which
+  // tended to wash every zone into a muddy in-between color): solid green
+  // skin, then a solid white rind ring, then a short blend into flesh.
+  const GREEN_TO = 0.085, WHITE_TO = 0.102, FLESH_FROM = 0.118;
   for (let i=0;i<VN;i++){
-    const y=restPos[i*3+1];
-    const t = y/hy*0.5+0.5; // 0 at bottom, 1 at top
-    const flesh = fleshA.clone().lerp(fleshB, t);
-    let c;
-    if (t < WHITE_FROM) c = flesh;
-    else if (t < GREEN_FROM) c = flesh.clone().lerp(rindWhite, (t-WHITE_FROM)/(GREEN_FROM-WHITE_FROM));
-    else c = rindWhite.clone().lerp(rindGreen, Math.min(1,(t-GREEN_FROM)/(1-GREEN_FROM)/0.6));
+    const x=restPos[i*3], y=restPos[i*3+1];
+    const { dist, isArc } = nearestOutline(x,y);
+    const fleshT = y/(1.28*SCALE3D)*-0.5+0.5;
+    const flesh = fleshA.clone().lerp(fleshB, Math.max(0,Math.min(1,fleshT)));
+    let c = flesh;
+    if (isArc){
+      if (dist < GREEN_TO) c = rindGreen;
+      else if (dist < WHITE_TO) c = rindGreen.clone().lerp(rindWhite, (dist-GREEN_TO)/(WHITE_TO-GREEN_TO));
+      else if (dist < FLESH_FROM) c = rindWhite.clone().lerp(flesh, (dist-WHITE_TO)/(FLESH_FROM-WHITE_TO));
+      else c = flesh;
+    }
     colors[i*3]=c.r; colors[i*3+1]=c.g; colors[i*3+2]=c.b;
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors,3));
@@ -310,16 +361,16 @@ paint(0);
 
 const material = new THREE.MeshPhysicalMaterial({
   vertexColors:true,
-  roughness:0.32,
+  roughness:0.42,
   metalness:0,
-  transmission:0.2,
-  thickness:0.6,
-  ior:1.32,
-  clearcoat:0.4,
-  clearcoatRoughness:0.3,
+  transmission:0.08,
+  thickness:0.5,
+  ior:1.3,
+  clearcoat:0.25,
+  clearcoatRoughness:0.35,
   attenuationColor:new THREE.Color(0xff7a63),
   attenuationDistance:1.1,
-  envMapIntensity:0.6,
+  envMapIntensity:0.4,
 });
 
 const jelly = new THREE.Mesh(geo, material);
@@ -333,11 +384,11 @@ const seedIdx = [];
 (function pickSeeds(){
   const candidates = [];
   for (let i=0;i<VN;i++){
-    const x=restPos[i*3], y=restPos[i*3+1], z=restPos[i*3+2];
-    const nx=Math.abs(x)/hx, ny=Math.abs(y)/hy, nz=Math.abs(z)/hz;
-    if (z>0 && nz>0.92 && nx<0.62 && ny<0.62) candidates.push(i);
+    const x=restPos[i*3], y=restPos[i*3+1];
+    const { dist, isArc } = nearestOutline(x,y);
+    if (!isArc) candidates.push(i);
   }
-  for (let k=0;k<14 && candidates.length;k++){
+  for (let k=0;k<16 && candidates.length;k++){
     const j = Math.floor(Math.random()*candidates.length);
     seedIdx.push(candidates.splice(j,1)[0]);
   }
