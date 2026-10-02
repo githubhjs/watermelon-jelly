@@ -52,3 +52,7 @@ python3 -m http.server 8080
 An earlier iteration rendered the jelly as a flat 2D canvas wedge (perimeter spring ring, no real
 3D). See the git history (commits before the Three.js rewrite) if you want to look at that
 simpler approach.
+
+## Author
+
+Chih-Hsueh "Josh" HUANG <huangjs@gmail.com>
