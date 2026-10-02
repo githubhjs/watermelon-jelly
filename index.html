@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Watermelon Jelly</title>
+<meta name="description" content="An interactive jelly watermelon you can drag, poke, and jiggle.">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8D%89%3C/text%3E%3C/svg%3E">
+<style>
+  :root{
+    --sky-top:#bfe9ff;
+    --sky-bot:#eaf8ff;
+    --ink:#1f2a24;
+    --card:#ffffffcc;
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; height:100%; overflow:hidden;
+    background:linear-gradient(180deg,var(--sky-top),var(--sky-bot));
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:var(--ink);
+    touch-action:none;
+  }
+  canvas{
+    display:block;
+    width:100%; height:100%;
+    cursor:grab;
+  }
+  canvas.grabbing{ cursor:grabbing; }
+
+  .hud{
+    position:fixed; left:0; right:0; top:0;
+    display:flex; justify-content:space-between; align-items:flex-start;
+    padding: max(14px, env(safe-area-inset-top)) 16px 0 16px;
+    pointer-events:none;
+  }
+  .title{
+    background:var(--card);
+    backdrop-filter: blur(6px);
+    border-radius:14px;
+    padding:10px 16px;
+    box-shadow:0 4px 18px rgba(20,60,40,0.12);
+    pointer-events:auto;
+    max-width: min(78vw, 420px);
+  }
+  .title h1{
+    margin:0; font-size:17px; letter-spacing:.2px;
+  }
+  .title p{
+    margin:4px 0 0 0; font-size:12.5px; line-height:1.4; color:#415349;
+  }
+  .hud-right{
+    display:flex; flex-direction:column; align-items:flex-end; gap:8px;
+    pointer-events:auto;
+  }
+  .pill{
+    background:var(--card);
+    backdrop-filter: blur(6px);
+    border-radius:999px;
+    padding:8px 14px;
+    font-size:13px;
+    font-weight:600;
+    box-shadow:0 4px 18px rgba(20,60,40,0.12);
+    display:flex; align-items:center; gap:8px;
+    border:none;
+    cursor:pointer;
+    color:var(--ink);
+  }
+  .pill:active{ transform:scale(0.96); }
+  .footer{
+    position:fixed; left:0; right:0; bottom:0;
+    display:flex; justify-content:center;
+    padding: 10px 10px max(10px, env(safe-area-inset-bottom)) 10px;
+    pointer-events:none;
+  }
+  .footer a{
+    pointer-events:auto;
+    font-size:11.5px;
+    color:#3c5a4a;
+    background:var(--card);
+    padding:6px 12px;
+    border-radius:999px;
+    text-decoration:none;
+    box-shadow:0 2px 10px rgba(20,60,40,0.10);
+  }
+  @media (max-width:520px){
+    .title h1{ font-size:15px; }
+    .title p{ font-size:11.5px; }
+  }
+  [hidden]{ display:none!important; }
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<div class="hud">
+  <div class="title">
+    <h1>🍉 Watermelon Jelly</h1>
+    <p id="instructions">Drag the watermelon. Tap to poke it. It jiggles like jelly.</p>
+  </div>
+  <div class="hud-right">
+    <button class="pill" id="soundBtn" type="button" aria-pressed="false">🔈 Sound off</button>
+    <button class="pill" id="pokeCount" type="button" aria-live="polite">Pokes: 0</button>
+  </div>
+</div>
+
+<div class="footer">
+  <a href="https://github.com/githubhjs/watermelon-jelly" target="_blank" rel="noopener">source on GitHub</a>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  // ---------- canvas / dpr setup ----------
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  let W = 0, H = 0, DPR = Math.max(1, Math.min(2.5, window.devicePixelRatio || 1));
+
+  function resize(){
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = Math.floor(W * DPR);
+    canvas.height = Math.floor(H * DPR);
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    layoutBlobs();
+  }
+
+  // ---------- shape builder: a watermelon wedge silhouette ----------
+  // Returns an array of {x,y, isArc} local offsets (unscaled, radius ~1),
+  // ordered around the perimeter. isArc marks the points that belong to the
+  // outer rind arc (as opposed to the flat cut edges / tip).
+  function buildWedgePoints(){
+    const pts = [];
+    const archalf = 58 * Math.PI/180; // half-angle of the rind arc
+    const archN = 14;
+    // top rind arc, left-to-right
+    for (let i=0;i<=archN;i++){
+      const t = -archalf + (2*archalf)*(i/archN);
+      pts.push({ x: Math.sin(t), y: -Math.cos(t), isArc:true });
+    }
+    // right cut edge, arc-end down to near the tip (slightly convex outward)
+    const archEnd = pts[pts.length-1];
+    const tip = { x:0, y: 1.28 };
+    const rightMid = { x: archEnd.x*0.62, y: archEnd.y*0.25 + tip.y*0.55 };
+    pts.push({ x:rightMid.x, y:rightMid.y, isArc:false });
+    // rounded tip (3 points)
+    pts.push({ x: 0.07, y: tip.y*0.97, isArc:false });
+    pts.push({ x: 0,    y: tip.y,      isArc:false });
+    pts.push({ x: -0.07,y: tip.y*0.97, isArc:false });
+    // left cut edge, mirrored, tip back up to arc start
+    const archStart = pts[0];
+    const leftMid = { x: archStart.x*0.62, y: archStart.y*0.25 + tip.y*0.55 };
+    pts.push({ x:leftMid.x, y:leftMid.y, isArc:false });
+    return pts;
+  }
+
+  const SEED_LOCAL = [
+    [-0.28,-0.18],[0.05,-0.32],[0.33,-0.12],[-0.08,-0.52],[0.22,-0.46],
+    [-0.42, 0.10],[0.40, 0.14],[-0.18, 0.28],[0.14, 0.42],[0.00, 0.05]
+  ];
+
+  // ---------- soft body blob ----------
+  class JellyMelon{
+    constructor(x,y,scale,hue){
+      this.homeX=x; this.homeY=y; this.scale=scale;
+      this.hue = hue || 0; // small per-instance tint variance
+      const shape = buildWedgePoints();
+      this.points = shape.map(p=>({
+        hx: p.x*scale, hy: p.y*scale,  // home offset (fixed, relative to homeX/homeY)
+        x: x+p.x*scale, y: y+p.y*scale,
+        vx:0, vy:0,
+        isArc: p.isArc
+      }));
+      this.seeds = SEED_LOCAL.map(([sx,sy])=>({
+        hx: sx*scale, hy: sy*scale,
+        x: x+sx*scale, y: y+sy*scale,
+        vx:0, vy:0
+      }));
+      this.grabbing = false;
+      this.lastPoke = 0;
+    }
+
+    setHome(x,y,scale){
+      const dx = x-this.homeX, dy = y-this.homeY, ds = scale/this.scale;
+      this.homeX=x; this.homeY=y; this.scale=scale;
+      for (const p of this.points){ p.hx*=ds; p.hy*=ds; }
+      for (const s of this.seeds){ s.hx*=ds; s.hy*=ds; }
+    }
+
+    // nudge every point gently toward home + localized pointer pull
+    step(dt, pointer){
+      const STIFF = 10.5;     // spring to home
+      const NEIGHBOR = 7.0;   // cohesion between neighbors
+      const DAMP = 4.2;
+      const n = this.points.length;
+
+      const applyHomeAndDamp = (p)=>{
+        const tx = this.homeX + p.hx, ty = this.homeY + p.hy;
+        const ax = (tx - p.x)*STIFF - p.vx*DAMP;
+        const ay = (ty - p.y)*STIFF - p.vy*DAMP;
+        p.vx += ax*dt; p.vy += ay*dt;
+      };
+
+      for (let i=0;i<n;i++) applyHomeAndDamp(this.points[i]);
+      for (const s of this.seeds) applyHomeAndDamp(s);
+
+      // neighbor cohesion along the perimeter (keeps it from looking torn)
+      for (let i=0;i<n;i++){
+        const a = this.points[i], b = this.points[(i+1)%n];
+        const relHx = (this.homeX+a.hx) - (this.homeX+b.hx);
+        const relHy = (this.homeY+a.hy) - (this.homeY+b.hy);
+        const curX = a.x-b.x, curY = a.y-b.y;
+        const fx = ((relHx-curX))*NEIGHBOR;
+        const fy = ((relHy-curY))*NEIGHBOR;
+        a.vx += fx*dt*0.5; a.vy += fy*dt*0.5;
+        b.vx -= fx*dt*0.5; b.vy -= fy*dt*0.5;
+      }
+
+      // pointer influence: magnet-pull nearby points while actively grabbed
+      if (pointer && pointer.down && pointer.owner === this){
+        const RADIUS = this.scale*1.35;
+        const PULL = 46;
+        const all = this.points.concat(this.seeds);
+        for (const p of all){
+          const dx = pointer.x - p.x, dy = pointer.y - p.y;
+          const d = Math.hypot(dx,dy);
+          if (d < RADIUS){
+            const w = 1 - d/RADIUS;
+            p.vx += dx*w*PULL*dt;
+            p.vy += dy*w*PULL*dt;
+          }
+        }
+      }
+
+      const all = this.points.concat(this.seeds);
+      for (const p of all){
+        // mild velocity clamp so a wild drag can't explode the sim
+        const sp = Math.hypot(p.vx,p.vy);
+        const MAXV = 2400;
+        if (sp>MAXV){ p.vx = p.vx/sp*MAXV; p.vy = p.vy/sp*MAXV; }
+        p.x += p.vx*dt; p.y += p.vy*dt;
+      }
+    }
+
+    poke(px,py,strength){
+      const RADIUS = this.scale*1.4;
+      const all = this.points.concat(this.seeds);
+      for (const p of all){
+        const dx = p.x-px, dy = p.y-py;
+        const d = Math.hypot(dx,dy) || 0.0001;
+        if (d < RADIUS){
+          const w = (1 - d/RADIUS);
+          // push slightly inward then let the spring overshoot outward -> boing
+          p.vx += (dx/d)*w*strength;
+          p.vy += (dy/d)*w*strength;
+        }
+      }
+    }
+
+    hitTest(px,py){
+      // rough containment test against the current (deformed) polygon
+      const pts = this.points;
+      let inside = false;
+      for (let i=0,j=pts.length-1;i<pts.length;j=i++){
+        const xi=pts[i].x, yi=pts[i].y, xj=pts[j].x, yj=pts[j].y;
+        const intersect = ((yi>py)!==(yj>py)) && (px < (xj-xi)*(py-yi)/((yj-yi)||1e-6)+xi);
+        if (intersect) inside = !inside;
+      }
+      return inside;
+    }
+
+    draw(ctx){
+      const pts = this.points;
+      const n = pts.length;
+      const mid = (a,b)=>({x:(a.x+b.x)/2, y:(a.y+b.y)/2});
+
+      // --- flesh fill (smooth closed spline through all perimeter points) ---
+      ctx.beginPath();
+      let m0 = mid(pts[n-1], pts[0]);
+      ctx.moveTo(m0.x, m0.y);
+      for (let i=0;i<n;i++){
+        const next = pts[(i+1)%n];
+        const m = mid(pts[i], next);
+        ctx.quadraticCurveTo(pts[i].x, pts[i].y, m.x, m.y);
+      }
+      ctx.closePath();
+
+      const g = ctx.createLinearGradient(
+        this.homeX, this.homeY-this.scale, this.homeX, this.homeY+this.scale
+      );
+      g.addColorStop(0, `hsl(${350+this.hue} 78% 66%)`);
+      g.addColorStop(1, `hsl(${352+this.hue} 72% 54%)`);
+      ctx.fillStyle = g;
+      ctx.fill();
+      ctx.save();
+      ctx.clip();
+
+      // seeds, clipped inside the flesh shape
+      for (const s of this.seeds){
+        ctx.save();
+        ctx.translate(s.x, s.y);
+        const ang = Math.atan2(s.vy, s.vx);
+        ctx.rotate(ang*0.08);
+        ctx.fillStyle = '#2a1b12';
+        ctx.beginPath();
+        ctx.ellipse(0,0, this.scale*0.045, this.scale*0.075, 0, 0, Math.PI*2);
+        ctx.fill();
+        ctx.restore();
+      }
+      ctx.restore();
+
+      // soft inner shading near the rind for a bit of depth
+      ctx.save();
+      ctx.beginPath();
+      m0 = mid(pts[n-1], pts[0]);
+      ctx.moveTo(m0.x, m0.y);
+      for (let i=0;i<n;i++){
+        const next = pts[(i+1)%n];
+        const m = mid(pts[i], next);
+        ctx.quadraticCurveTo(pts[i].x, pts[i].y, m.x, m.y);
+      }
+      ctx.closePath();
+      ctx.clip();
+      ctx.globalAlpha = 0.16;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.ellipse(this.homeX - this.scale*0.28, this.homeY - this.scale*0.42, this.scale*0.55, this.scale*0.3, -0.5, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+
+      // --- rind: thick white + green stroke, only along the arc portion ---
+      const arcPts = pts.filter(p=>p.isArc);
+      if (arcPts.length>1){
+        const drawArcStroke = (width, color)=>{
+          ctx.beginPath();
+          ctx.moveTo(arcPts[0].x, arcPts[0].y);
+          for (let i=0;i<arcPts.length-1;i++){
+            const a = arcPts[i], b = arcPts[i+1];
+            const m = mid(a,b);
+            ctx.quadraticCurveTo(a.x,a.y,m.x,m.y);
+          }
+          ctx.lineTo(arcPts[arcPts.length-1].x, arcPts[arcPts.length-1].y);
+          ctx.lineWidth = width;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.strokeStyle = color;
+          ctx.stroke();
+        };
+        drawArcStroke(this.scale*0.22, `hsl(${128+this.hue*0.3} 42% 38%)`);
+        drawArcStroke(this.scale*0.10, `hsl(${100} 48% 92%)`);
+      }
+
+      // thin outline for crispness
+      ctx.beginPath();
+      m0 = mid(pts[n-1], pts[0]);
+      ctx.moveTo(m0.x, m0.y);
+      for (let i=0;i<n;i++){
+        const next = pts[(i+1)%n];
+        const m = mid(pts[i], next);
+        ctx.quadraticCurveTo(pts[i].x, pts[i].y, m.x, m.y);
+      }
+      ctx.closePath();
+      ctx.lineWidth = Math.max(1, this.scale*0.012);
+      ctx.strokeStyle = 'rgba(30,40,25,0.18)';
+      ctx.stroke();
+    }
+  }
+
+  // ---------- scene ----------
+  let hero, bg1, bg2;
+  function layoutBlobs(){
+    const heroScale = Math.min(W,H) * 0.30;
+    const heroPos = { x: W*0.5, y: H*0.56 };
+    if (!hero){
+      hero = new JellyMelon(heroPos.x, heroPos.y, heroScale, 0);
+      bg1 = new JellyMelon(W*0.16, H*0.22, heroScale*0.42, -8);
+      bg2 = new JellyMelon(W*0.86, H*0.20, heroScale*0.36, 10);
+    } else {
+      hero.setHome(heroPos.x, heroPos.y, heroScale);
+      bg1.setHome(W*0.16, H*0.22, heroScale*0.42);
+      bg2.setHome(W*0.86, H*0.20, heroScale*0.36);
+    }
+  }
+
+  const melons = ()=>[hero,bg1,bg2];
+
+  // ---------- sound (synthesized, no assets) ----------
+  let audioCtx = null, soundOn = false;
+  function ensureAudio(){
+    if (!audioCtx){
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) audioCtx = new AC();
+    }
+    return audioCtx;
+  }
+  function playBoing(big){
+    if (!soundOn) return;
+    const ac = ensureAudio();
+    if (!ac) return;
+    const t0 = ac.currentTime;
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    osc.type = 'sine';
+    const startF = big ? 260 : 340;
+    const endF = big ? 110 : 160;
+    osc.frequency.setValueAtTime(startF, t0);
+    osc.frequency.exponentialRampToValueAtTime(endF, t0+0.22);
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(big?0.22:0.14, t0+0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0+0.26);
+    osc.connect(gain); gain.connect(ac.destination);
+    osc.start(t0); osc.stop(t0+0.28);
+  }
+
+  // ---------- pointer interaction ----------
+  const pointer = { x:0, y:0, down:false, owner:null, downX:0, downY:0, moved:false };
+  let pokeCount = 0;
+  const pokeCountEl = document.getElementById('pokeCount');
+  const soundBtn = document.getElementById('soundBtn');
+
+  function topMelonAt(x,y){
+    // hero drawn last visually isn't tracked; just test hero first (foreground), then bg2, bg1
+    if (hero.hitTest(x,y)) return hero;
+    if (bg2.hitTest(x,y)) return bg2;
+    if (bg1.hitTest(x,y)) return bg1;
+    return null;
+  }
+
+  function onDown(x,y){
+    pointer.x=x; pointer.y=y; pointer.down=true; pointer.moved=false;
+    pointer.downX=x; pointer.downY=y;
+    pointer.owner = topMelonAt(x,y) || hero;
+    canvas.classList.add('grabbing');
+  }
+  function onMove(x,y){
+    pointer.x=x; pointer.y=y;
+    if (pointer.down){
+      const d = Math.hypot(x-pointer.downX, y-pointer.downY);
+      if (d>6) pointer.moved = true;
+    }
+  }
+  function onUp(x,y){
+    if (pointer.down && !pointer.moved && pointer.owner){
+      // treat as a poke
+      pointer.owner.poke(x,y, pointer.owner===hero? 980:760);
+      pokeCount++;
+      pokeCountEl.textContent = 'Pokes: ' + pokeCount;
+      playBoing(pointer.owner===hero);
+      const instr = document.getElementById('instructions');
+      if (pokeCount===1) instr.textContent = 'Nice! Try dragging it around too.';
+    }
+    pointer.down = false;
+    pointer.owner = null;
+    canvas.classList.remove('grabbing');
+  }
+
+  canvas.addEventListener('pointerdown', (e)=>{
+    canvas.setPointerCapture(e.pointerId);
+    onDown(e.clientX, e.clientY);
+  });
+  canvas.addEventListener('pointermove', (e)=> onMove(e.clientX, e.clientY));
+  window.addEventListener('pointerup', (e)=> onUp(e.clientX, e.clientY));
+  window.addEventListener('pointercancel', ()=>{ pointer.down=false; pointer.owner=null; canvas.classList.remove('grabbing'); });
+
+  soundBtn.addEventListener('click', ()=>{
+    soundOn = !soundOn;
+    soundBtn.textContent = soundOn ? '🔊 Sound on' : '🔈 Sound off';
+    soundBtn.setAttribute('aria-pressed', String(soundOn));
+    if (soundOn) { const ac = ensureAudio(); if (ac && ac.state==='suspended') ac.resume(); }
+  });
+
+  // ---------- idle ambient life ----------
+  let nextIdle = performance.now() + 2200;
+  function maybeIdlePoke(now){
+    if (now < nextIdle) return;
+    nextIdle = now + 3400 + Math.random()*3600;
+    const m = [hero,bg1,bg2][Math.floor(Math.random()*3)];
+    const ang = Math.random()*Math.PI*2;
+    const r = m.scale*0.4;
+    m.poke(m.homeX+Math.cos(ang)*r, m.homeY+Math.sin(ang)*r, 140);
+  }
+
+  // ---------- main loop ----------
+  let last = performance.now();
+  function frame(now){
+    let dt = (now-last)/1000;
+    last = now;
+    dt = Math.min(dt, 1/30); // avoid huge steps on tab switch
+    const sub = 2;
+    for (let i=0;i<sub;i++){
+      for (const m of melons()) m.step(dt/sub, pointer);
+    }
+    maybeIdlePoke(now);
+
+    ctx.clearRect(0,0,W,H);
+    drawBackground();
+    bg1.draw(ctx);
+    bg2.draw(ctx);
+    hero.draw(ctx);
+
+    requestAnimationFrame(frame);
+  }
+
+  function drawBackground(){
+    // a soft ground shadow under the hero melon for grounding
+    ctx.save();
+    ctx.globalAlpha = 0.14;
+    ctx.fillStyle = '#153324';
+    ctx.beginPath();
+    ctx.ellipse(hero.homeX, hero.homeY+hero.scale*0.98, hero.scale*0.95, hero.scale*0.16, 0,0,Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
