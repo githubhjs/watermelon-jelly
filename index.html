@@ -445,6 +445,13 @@ const state = {
 // ======================================================================
 const GROUND_Y = -1.6;
 plate.position.y = GROUND_Y;
+// A teleport-based grab (direct m_x writes, see stepPhysics) can shove nodes
+// through the ground rigid body faster than one physics step's collision
+// pass can catch -- once that happens the soft body and the ground's
+// broadphase pair never gets re-established and it free-falls forever, even
+// after release. FLOOR_Y is a hard backstop against that, independent of
+// the rigid-body collision: no node is ever allowed below it.
+const FLOOR_Y = GROUND_Y + 0.03;
 
 let AmmoLib, physicsWorld, softBody, groundBody;
 const ammoTmpTransform = () => new AmmoLib.btTransform();
@@ -550,7 +557,8 @@ function stepPhysics(dt, isDragging, shakeVec){
     const nodes = softBody.get_m_nodes();
     for (const g of grabbedNodes){
       const node = nodes.at(g.i);
-      node.get_m_x().setValue(dragPoint.x+g.ox, dragPoint.y+g.oy, dragPoint.z+g.oz);
+      const ny = Math.max(dragPoint.y+g.oy, FLOOR_Y); // can't drag it through the plate
+      node.get_m_x().setValue(dragPoint.x+g.ox, ny, dragPoint.z+g.oz);
       node.get_m_v().setValue(0,0,0);
     }
   }
@@ -571,8 +579,17 @@ function stepPhysics(dt, isDragging, shakeVec){
   for (let i=0;i<VN;i++){
     const node = nodes.at(i);
     const p = node.get_m_x();
-    posArr[i*3]=p.x(); posArr[i*3+1]=p.y(); posArr[i*3+2]=p.z();
     const v = node.get_m_v();
+    if (p.y() < FLOOR_Y){
+      // Backstop against tunneling through the ground rigid body (a fast
+      // drag/poke/shake can move a node further in one step than the
+      // collision pass can catch) -- clamp it back up and kill the
+      // downward velocity component so it doesn't just re-penetrate next
+      // frame, without touching its horizontal motion.
+      p.setValue(p.x(), FLOOR_Y, p.z());
+      if (v.y()<0) v.setValue(v.x(), 0, v.z());
+    }
+    posArr[i*3]=p.x(); posArr[i*3+1]=p.y(); posArr[i*3+2]=p.z();
     energyAccum += v.x()*v.x()+v.y()*v.y()+v.z()*v.z();
   }
   posAttr.needsUpdate = true;
@@ -827,7 +844,7 @@ window.Ammo().then((AmmoLibResolved)=>{
   AmmoLib = AmmoLibResolved;
   startPhysics();
   requestAnimationFrame(frame);
-  setTimeout(()=> setStatus('No wobbles yet.'), 1200);
+  setTimeout(()=> setStatus('Settling onto the plate.', 4000), 1200);
 });
 </script>
 </body>
