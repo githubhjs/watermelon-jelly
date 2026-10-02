@@ -3,89 +3,140 @@
 <head>
 <meta charset="utf-8">
 <title>Watermelon Jelly</title>
-<meta name="description" content="An interactive jelly watermelon you can drag, poke, and jiggle.">
+<meta name="description" content="An interactive jelly watermelon slice you can drag, poke, shake, and tune — a little material study.">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8D%89%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;1,9..144,500;1,9..144,600&family=Inter:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --sky-top:#bfe9ff;
-    --sky-bot:#eaf8ff;
-    --ink:#1f2a24;
-    --card:#ffffffcc;
+    --bg0:#f3ede3; --bg1:#ece3d4;
+    --ink:#2b2420; --ink-soft:#766b5e;
+    --panel:rgba(255,253,249,0.82); --panel-line:rgba(43,36,32,0.12);
+    --accent:#b3372c; --accent-ink:#fff6ef;
+    --track:rgba(43,36,32,0.14);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg0:#1b1712; --bg1:#120f0c;
+      --ink:#f1e9dd; --ink-soft:#b2a493;
+      --panel:rgba(30,25,20,0.78); --panel-line:rgba(241,233,221,0.14);
+      --accent:#ff8a73; --accent-ink:#2a0f0a;
+      --track:rgba(241,233,221,0.18);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg0:#1b1712; --bg1:#120f0c;
+    --ink:#f1e9dd; --ink-soft:#b2a493;
+    --panel:rgba(30,25,20,0.78); --panel-line:rgba(241,233,221,0.14);
+    --accent:#ff8a73; --accent-ink:#2a0f0a;
+    --track:rgba(241,233,221,0.18);
   }
   *{box-sizing:border-box;}
   html,body{
     margin:0; padding:0; height:100%; overflow:hidden;
-    background:linear-gradient(180deg,var(--sky-top),var(--sky-bot));
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:
+      radial-gradient(120% 90% at 50% 8%, var(--bg0), var(--bg1));
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
     color:var(--ink);
     touch-action:none;
+    -webkit-tap-highlight-color:transparent;
   }
-  canvas{
-    display:block;
-    width:100%; height:100%;
-    cursor:grab;
-  }
+  canvas{ display:block; width:100%; height:100%; cursor:grab; }
   canvas.grabbing{ cursor:grabbing; }
 
-  .hud{
+  header{
     position:fixed; left:0; right:0; top:0;
-    display:flex; justify-content:space-between; align-items:flex-start;
-    padding: max(14px, env(safe-area-inset-top)) 16px 0 16px;
+    padding: max(22px, env(safe-area-inset-top)) 24px 0 26px;
     pointer-events:none;
   }
-  .title{
-    background:var(--card);
-    backdrop-filter: blur(6px);
-    border-radius:14px;
-    padding:10px 16px;
-    box-shadow:0 4px 18px rgba(20,60,40,0.12);
-    pointer-events:auto;
-    max-width: min(78vw, 420px);
+  .kicker{
+    margin:0 0 4px 0; font-size:11px; font-weight:600; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--ink-soft);
   }
-  .title h1{
-    margin:0; font-size:17px; letter-spacing:.2px;
-  }
-  .title p{
-    margin:4px 0 0 0; font-size:12.5px; line-height:1.4; color:#415349;
-  }
-  .hud-right{
-    display:flex; flex-direction:column; align-items:flex-end; gap:8px;
-    pointer-events:auto;
-  }
-  .pill{
-    background:var(--card);
-    backdrop-filter: blur(6px);
-    border-radius:999px;
-    padding:8px 14px;
-    font-size:13px;
-    font-weight:600;
-    box-shadow:0 4px 18px rgba(20,60,40,0.12);
-    display:flex; align-items:center; gap:8px;
-    border:none;
-    cursor:pointer;
+  h1{
+    margin:0; font-family:'Fraunces', Georgia, serif; font-style:italic; font-weight:500;
+    font-size:clamp(28px, 5vw, 44px); line-height:1.02; letter-spacing:-.01em;
     color:var(--ink);
   }
-  .pill:active{ transform:scale(0.96); }
-  .footer{
+  .tagline{ margin:8px 0 0 0; font-size:13.5px; line-height:1.45; color:var(--ink-soft); max-width:40ch; }
+  .status{ margin:10px 0 0 0; font-size:12.5px; font-weight:600; color:var(--accent); min-height:1.3em; }
+
+  .specimen{
+    position:fixed; top: max(22px, env(safe-area-inset-top));
+    right:24px; width:230px;
+    background:var(--panel); border:1px solid var(--panel-line); border-radius:16px;
+    padding:14px 16px 16px 16px; backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+    box-shadow:0 10px 30px rgba(20,15,10,0.10);
+    pointer-events:auto;
+  }
+  .specimen .eyebrow{
+    display:flex; justify-content:space-between; align-items:baseline;
+    font-size:10px; font-weight:700; letter-spacing:.12em; text-transform:uppercase;
+    color:var(--ink-soft); border-bottom:1px solid var(--panel-line); padding-bottom:8px; margin-bottom:10px;
+  }
+  .row{ margin-bottom:11px; }
+  .row-label{
+    display:flex; justify-content:space-between; font-size:12px; font-weight:600;
+    color:var(--ink); margin-bottom:5px;
+  }
+  .row-label b{ font-weight:700; color:var(--accent); font-variant-numeric:tabular-nums; }
+  .palette{ display:flex; gap:7px; margin-bottom:12px; }
+  .swatch{
+    width:22px; height:22px; border-radius:50%; border:2px solid transparent; cursor:pointer;
+    box-shadow:0 1px 3px rgba(0,0,0,.25) inset, 0 1px 2px rgba(0,0,0,.15);
+  }
+  .swatch[aria-pressed="true"]{ border-color:var(--ink); }
+  input[type=range]{
+    width:100%; appearance:none; height:4px; border-radius:4px; background:var(--track); outline:none;
+  }
+  input[type=range]::-webkit-slider-thumb{
+    appearance:none; width:15px; height:15px; border-radius:50%; background:var(--accent);
+    box-shadow:0 1px 3px rgba(0,0,0,.3); cursor:pointer; margin-top:-5.5px;
+  }
+  input[type=range]::-moz-range-thumb{
+    width:15px; height:15px; border-radius:50%; background:var(--accent); border:none; cursor:pointer;
+  }
+  .btnrow{ display:flex; gap:6px; margin-top:12px; flex-wrap:wrap; }
+  button.spec-btn{
+    flex:1 1 auto; font:600 11.5px/1 'Inter',sans-serif; color:var(--ink); background:transparent;
+    border:1px solid var(--panel-line); border-radius:999px; padding:8px 10px; cursor:pointer;
+    white-space:nowrap;
+  }
+  button.spec-btn:hover{ border-color:var(--accent); }
+  button.spec-btn.primary{ background:var(--accent); color:var(--accent-ink); border-color:transparent; }
+  button.spec-btn[aria-pressed="true"]{ background:var(--track); }
+  button.spec-btn:focus-visible, input:focus-visible, .swatch:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+
+  .specbar{
     position:fixed; left:0; right:0; bottom:0;
-    display:flex; justify-content:center;
-    padding: 10px 10px max(10px, env(safe-area-inset-bottom)) 10px;
+    display:flex; justify-content:space-between; align-items:center; gap:10px;
+    padding:10px 22px max(10px, env(safe-area-inset-bottom)) 22px;
     pointer-events:none;
   }
-  .footer a{
-    pointer-events:auto;
-    font-size:11.5px;
-    color:#3c5a4a;
-    background:var(--card);
-    padding:6px 12px;
-    border-radius:999px;
-    text-decoration:none;
-    box-shadow:0 2px 10px rgba(20,60,40,0.10);
+  .specbar .readout{
+    font-size:11px; font-weight:600; color:var(--ink-soft); letter-spacing:.02em;
+    font-variant-numeric:tabular-nums;
   }
-  @media (max-width:520px){
-    .title h1{ font-size:15px; }
-    .title p{ font-size:11.5px; }
+  .specbar .readout b{ color:var(--ink); font-weight:700; }
+  .specbar a{
+    pointer-events:auto; font-size:11px; font-weight:600; color:var(--ink-soft);
+    text-decoration:none; border-bottom:1px solid var(--panel-line);
+  }
+  .specbar a:hover{ color:var(--accent); border-color:var(--accent); }
+
+  @media (max-width:720px){
+    .specimen{
+      top:auto; bottom: max(14px, env(safe-area-inset-bottom)); left:14px; right:14px; width:auto;
+      display:flex; flex-wrap:wrap; align-items:center; gap:10px 16px; padding:12px 14px;
+    }
+    .specimen .eyebrow{ display:none; }
+    .row{ margin-bottom:0; flex:1 1 118px; }
+    .palette{ margin-bottom:0; }
+    .btnrow{ flex:1 1 100%; margin-top:2px; }
+    .specbar{ display:none; }
+    header{ padding-right:16px; }
   }
   [hidden]{ display:none!important; }
 </style>
@@ -94,18 +145,42 @@
 
 <canvas id="c"></canvas>
 
-<div class="hud">
-  <div class="title">
-    <h1>🍉 Watermelon Jelly</h1>
-    <p id="instructions">Drag the watermelon. Tap to poke it. It jiggles like jelly.</p>
+<header>
+  <p class="kicker">Material Studies · No. 7</p>
+  <h1>Melon Jelly.</h1>
+  <p class="tagline">A slice of summer. Soft to the touch. Too pretty to eat.</p>
+  <p class="status" id="status">Settling onto the plate.</p>
+</header>
+
+<div class="specimen">
+  <div class="eyebrow"><span>The Specimen</span><span>🍉</span></div>
+  <div class="palette" role="group" aria-label="Flesh color">
+    <button class="swatch" style="background:#d94f44" data-hue="0" aria-pressed="true" aria-label="Classic red"></button>
+    <button class="swatch" style="background:#e08a3c" data-hue="28" aria-label="Sunrise orange"></button>
+    <button class="swatch" style="background:#d6457a" data-hue="-18" aria-label="Rose pink"></button>
   </div>
-  <div class="hud-right">
-    <button class="pill" id="soundBtn" type="button" aria-pressed="false">🔈 Sound off</button>
-    <button class="pill" id="pokeCount" type="button" aria-live="polite">Pokes: 0</button>
+  <div class="row">
+    <div class="row-label"><span>Firmness</span><b id="firmnessVal">52</b></div>
+    <input type="range" id="firmness" min="0" max="100" value="52">
+  </div>
+  <div class="row">
+    <div class="row-label"><span>Internal dampening</span><b id="dampVal">46</b></div>
+    <input type="range" id="damping" min="0" max="100" value="46">
+  </div>
+  <div class="btnrow">
+    <button class="spec-btn primary" id="nudgeBtn" type="button">Give it a nudge</button>
+    <button class="spec-btn" id="shakeBtn" type="button">Shake the plate</button>
+  </div>
+  <div class="btnrow">
+    <button class="spec-btn" id="resetBtn" type="button">Reset</button>
+    <button class="spec-btn" id="pauseBtn" type="button" aria-pressed="false">Pause</button>
+    <button class="spec-btn" id="soundBtn" type="button" aria-pressed="false">Sound off</button>
   </div>
 </div>
 
-<div class="footer">
+<div class="specbar">
+  <div class="readout" id="readoutLeft">Mass: <b>612 g</b> &nbsp;·&nbsp; Volume: <b>410 ml</b></div>
+  <div class="readout" id="readoutRight">Wobble energy: <b id="energyVal">0%</b></div>
   <a href="https://github.com/githubhjs/watermelon-jelly" target="_blank" rel="noopener">source on GitHub</a>
 </div>
 
@@ -113,48 +188,34 @@
 (function(){
   "use strict";
 
-  // ---------- canvas / dpr setup ----------
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
-  let W = 0, H = 0, DPR = Math.max(1, Math.min(2.5, window.devicePixelRatio || 1));
+  let W=0,H=0,DPR=Math.max(1,Math.min(2.5,window.devicePixelRatio||1));
 
   function resize(){
-    W = window.innerWidth;
-    H = window.innerHeight;
-    canvas.width = Math.floor(W * DPR);
-    canvas.height = Math.floor(H * DPR);
-    canvas.style.width = W + 'px';
-    canvas.style.height = H + 'px';
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = Math.floor(W*DPR); canvas.height = Math.floor(H*DPR);
+    canvas.style.width = W+'px'; canvas.style.height = H+'px';
     ctx.setTransform(DPR,0,0,DPR,0,0);
-    layoutBlobs();
+    layout();
   }
 
-  // ---------- shape builder: a watermelon wedge silhouette ----------
-  // Returns an array of {x,y, isArc} local offsets (unscaled, radius ~1),
-  // ordered around the perimeter. isArc marks the points that belong to the
-  // outer rind arc (as opposed to the flat cut edges / tip).
-  function buildWedgePoints(){
+  // ---------- wedge silhouette (local unit coords) ----------
+  function buildWedgeOutline(){
     const pts = [];
-    const archalf = 58 * Math.PI/180; // half-angle of the rind arc
-    const archN = 14;
-    // top rind arc, left-to-right
+    const archalf = 58*Math.PI/180, archN = 14;
     for (let i=0;i<=archN;i++){
       const t = -archalf + (2*archalf)*(i/archN);
-      pts.push({ x: Math.sin(t), y: -Math.cos(t), isArc:true });
+      pts.push({x:Math.sin(t), y:-Math.cos(t), isArc:true});
     }
-    // right cut edge, arc-end down to near the tip (slightly convex outward)
     const archEnd = pts[pts.length-1];
-    const tip = { x:0, y: 1.28 };
-    const rightMid = { x: archEnd.x*0.62, y: archEnd.y*0.25 + tip.y*0.55 };
-    pts.push({ x:rightMid.x, y:rightMid.y, isArc:false });
-    // rounded tip (3 points)
-    pts.push({ x: 0.07, y: tip.y*0.97, isArc:false });
-    pts.push({ x: 0,    y: tip.y,      isArc:false });
-    pts.push({ x: -0.07,y: tip.y*0.97, isArc:false });
-    // left cut edge, mirrored, tip back up to arc start
+    const tip = {x:0,y:1.28};
+    pts.push({x:archEnd.x*0.62, y:archEnd.y*0.25+tip.y*0.55, isArc:false});
+    pts.push({x:0.07, y:tip.y*0.97, isArc:false});
+    pts.push({x:0,    y:tip.y,     isArc:false});
+    pts.push({x:-0.07,y:tip.y*0.97, isArc:false});
     const archStart = pts[0];
-    const leftMid = { x: archStart.x*0.62, y: archStart.y*0.25 + tip.y*0.55 };
-    pts.push({ x:leftMid.x, y:leftMid.y, isArc:false });
+    pts.push({x:archStart.x*0.62, y:archStart.y*0.25+tip.y*0.55, isArc:false});
     return pts;
   }
 
@@ -163,362 +224,479 @@
     [-0.42, 0.10],[0.40, 0.14],[-0.18, 0.28],[0.14, 0.42],[0.00, 0.05]
   ];
 
-  // ---------- soft body blob ----------
-  class JellyMelon{
-    constructor(x,y,scale,hue){
-      this.homeX=x; this.homeY=y; this.scale=scale;
-      this.hue = hue || 0; // small per-instance tint variance
-      const shape = buildWedgePoints();
-      this.points = shape.map(p=>({
-        hx: p.x*scale, hy: p.y*scale,  // home offset (fixed, relative to homeX/homeY)
-        x: x+p.x*scale, y: y+p.y*scale,
-        vx:0, vy:0,
-        isArc: p.isArc
-      }));
-      this.seeds = SEED_LOCAL.map(([sx,sy])=>({
-        hx: sx*scale, hy: sy*scale,
-        x: x+sx*scale, y: y+sy*scale,
-        vx:0, vy:0
-      }));
-      this.grabbing = false;
-      this.lastPoke = 0;
-    }
+  // ---------- soft-body jelly: a radial mesh of concentric rings from a
+  // central hub out to the wedge outline, held together by structural links
+  // (radial + circumferential) and pulled, as a whole, toward a rotation-
+  // corrected copy of its own rest shape ("shape matching"). ----------
+  const RING_FRACS = [0.26, 0.48, 0.68, 0.85, 1.0]; // last = outline itself
 
-    setHome(x,y,scale){
-      const dx = x-this.homeX, dy = y-this.homeY, ds = scale/this.scale;
-      this.homeX=x; this.homeY=y; this.scale=scale;
-      for (const p of this.points){ p.hx*=ds; p.hy*=ds; }
-      for (const s of this.seeds){ s.hx*=ds; s.hy*=ds; }
-    }
+  class Jelly{
+    constructor(x,y,scale){
+      this.x=x; this.y=y; this.scale=scale;
+      this.firmness = 0.52;   // 0..1
+      this.damping  = 0.46;   // 0..1
+      this.hueShift = 0;
+      this.paused = false;
+      this.energy = 0;
 
-    // nudge every point gently toward home + localized pointer pull
-    step(dt, pointer){
-      const STIFF = 10.5;     // spring to home
-      const NEIGHBOR = 7.0;   // cohesion between neighbors
-      const DAMP = 4.2;
-      const n = this.points.length;
+      const outline = buildWedgeOutline();
+      this.N = outline.length;
+      this.isArc = outline.map(p=>p.isArc);
 
-      const applyHomeAndDamp = (p)=>{
-        const tx = this.homeX + p.hx, ty = this.homeY + p.hy;
-        const ax = (tx - p.x)*STIFF - p.vx*DAMP;
-        const ay = (ty - p.y)*STIFF - p.vy*DAMP;
-        p.vx += ax*dt; p.vy += ay*dt;
+      // local (unscaled) hub position: centroid of the outline
+      let hx=0, hy=0;
+      for (const p of outline){ hx+=p.x; hy+=p.y; }
+      hx/=outline.length; hy/=outline.length;
+      this.hubLocal = {x:hx, y:hy};
+
+      // build all mesh points: index 0 = hub, then ring*N + i for ring 0..K-1
+      this.K = RING_FRACS.length;
+      this.points = [];
+      const mkPoint = (lx,ly)=>({
+        qx:(lx-hx), qy:(ly-hy),      // offset from hub, in the REST frame (for shape matching)
+        x:0, y:0, vx:0, vy:0
+      });
+      this.points.push(mkPoint(hx,hy)); // hub = index 0
+      for (let k=0;k<this.K;k++){
+        for (let i=0;i<this.N;i++){
+          const o = outline[i];
+          const lx = hx + (o.x-hx)*RING_FRACS[k];
+          const ly = hy + (o.y-hy)*RING_FRACS[k];
+          this.points.push(mkPoint(lx,ly));
+        }
+      }
+      this.idx = (k,i)=> 1 + k*this.N + i; // k in [0..K-1], i in [0..N-1]
+      this.seeds = SEED_LOCAL.map(([sx,sy])=>({ qx:sx-hx, qy:sy-hy, x:0,y:0, vx:0,vy:0 }));
+
+      this.setHome(x,y,scale); // also places points at rest first time
+      for (const p of this.points){ p.x=this.homeOf(p); p.y=this.homeOfY(p); }
+      for (const s of this.seeds){ s.x=this.homeOf(s); s.y=this.homeOfY(s); }
+
+      // structural links: [a,b,restLen]
+      this.links = [];
+      const link=(a,b)=>{
+        const A=this.points[a], B=this.points[b];
+        const dx=(A.qx-B.qx)*scale, dy=(A.qy-B.qy)*scale;
+        this.links.push([a,b,Math.hypot(dx,dy)]);
       };
+      for (let i=0;i<this.N;i++) link(0, this.idx(0,i));                 // hub -> ring0
+      for (let k=0;k<this.K;k++){
+        for (let i=0;i<this.N;i++){
+          if (k<this.K-1) link(this.idx(k,i), this.idx(k+1,i));          // radial
+          link(this.idx(k,i), this.idx(k,(i+1)%this.N));                 // circumferential
+        }
+      }
+      this.restArea = this.outlineArea(true);
 
-      for (let i=0;i<n;i++) applyHomeAndDamp(this.points[i]);
-      for (const s of this.seeds) applyHomeAndDamp(s);
+      let minQy=Infinity, maxQy=-Infinity;
+      for (const p of this.points){ if (p.qy<minQy) minQy=p.qy; if (p.qy>maxQy) maxQy=p.qy; }
+      this._minQy = minQy; this._maxQySpan = (maxQy-minQy)||1;
+    }
 
-      // neighbor cohesion along the perimeter (keeps it from looking torn)
-      for (let i=0;i<n;i++){
-        const a = this.points[i], b = this.points[(i+1)%n];
-        const relHx = (this.homeX+a.hx) - (this.homeX+b.hx);
-        const relHy = (this.homeY+a.hy) - (this.homeY+b.hy);
-        const curX = a.x-b.x, curY = a.y-b.y;
-        const fx = ((relHx-curX))*NEIGHBOR;
-        const fy = ((relHy-curY))*NEIGHBOR;
-        a.vx += fx*dt*0.5; a.vy += fy*dt*0.5;
-        b.vx -= fx*dt*0.5; b.vy -= fy*dt*0.5;
+    shakeWeight(p){
+      return 0.25 + 0.75*Math.max(0, Math.min(1, (p.qy-this._minQy)/this._maxQySpan));
+    }
+
+    homeOf(p){ return this.x + p.qx*this.scale; }
+    homeOfY(p){ return this.y + p.qy*this.scale; }
+
+    setHome(x,y,scale){ this.x=x; this.y=y; this.scale=scale; }
+
+    outlinePoint(i){ return this.points[this.idx(this.K-1,i)]; }
+
+    outlineArea(rest){
+      let a=0;
+      for (let i=0;i<this.N;i++){
+        const p=this.outlinePoint(i), q=this.outlinePoint((i+1)%this.N);
+        const px = rest? this.homeOf(p):p.x, py = rest? this.homeOfY(p):p.y;
+        const qx = rest? this.homeOf(q):q.x, qy = rest? this.homeOfY(q):q.y;
+        a += px*qy - qx*py;
+      }
+      return a/2;
+    }
+
+    allPoints(){ return this.points; }
+
+    reset(){
+      for (const p of this.points){ p.x=this.homeOf(p); p.y=this.homeOfY(p); p.vx=0; p.vy=0; }
+      for (const s of this.seeds){ s.x=this.homeOf(s); s.y=this.homeOfY(s); s.vx=0; s.vy=0; }
+    }
+
+    step(dt, pointer, shakeForce){
+      if (this.paused) return;
+      const STRUCT = 0.25 + this.firmness*0.55;     // constraint stiffness
+      const DAMP = 1 - (0.012 + this.damping*0.07); // per-substep velocity retention
+      const MATCH = 0.06 + this.firmness*0.16;      // shape-matching pull
+
+      const pts = this.points;
+
+      // 1) integrate velocity -> position, with damping
+      for (const p of pts){
+        p.vx *= DAMP; p.vy *= DAMP;
+        // tip-of-the-wedge points (closer to the plate) feel a plate-shake
+        // fully; the rind near the top lags behind for an inertial slosh
+        // instead of the whole shape just translating rigidly.
+        if (shakeForce) p.vx += shakeForce*this.shakeWeight(p)*dt;
+        p.x += p.vx*dt; p.y += p.vy*dt;
+      }
+      for (const s of this.seeds){
+        s.vx *= DAMP; s.vy *= DAMP;
+        if (shakeForce) s.vx += shakeForce*this.shakeWeight(s)*dt;
+        s.x += s.vx*dt; s.y += s.vy*dt;
       }
 
-      // pointer influence: magnet-pull nearby points while actively grabbed
+      // 2) pointer drag: proportional pull toward pointer for nearby points
       if (pointer && pointer.down && pointer.owner === this){
-        const RADIUS = this.scale*1.35;
-        const PULL = 46;
-        const all = this.points.concat(this.seeds);
-        for (const p of all){
-          const dx = pointer.x - p.x, dy = pointer.y - p.y;
-          const d = Math.hypot(dx,dy);
-          if (d < RADIUS){
-            const w = 1 - d/RADIUS;
-            p.vx += dx*w*PULL*dt;
-            p.vy += dy*w*PULL*dt;
-          }
+        const RADIUS = this.scale*1.3, PULL = 10;
+        for (const p of pts){
+          const dx=pointer.x-p.x, dy=pointer.y-p.y, d=Math.hypot(dx,dy);
+          if (d<RADIUS){ const w=1-d/RADIUS; p.vx += dx*w*PULL*dt*60; p.vy += dy*w*PULL*dt*60; }
+        }
+        for (const s of this.seeds){
+          const dx=pointer.x-s.x, dy=pointer.y-s.y, d=Math.hypot(dx,dy);
+          if (d<RADIUS){ const w=1-d/RADIUS; s.vx += dx*w*PULL*dt*60; s.vy += dy*w*PULL*dt*60; }
         }
       }
 
-      const all = this.points.concat(this.seeds);
-      for (const p of all){
-        // mild velocity clamp so a wild drag can't explode the sim
-        const sp = Math.hypot(p.vx,p.vy);
-        const MAXV = 2400;
-        if (sp>MAXV){ p.vx = p.vx/sp*MAXV; p.vy = p.vy/sp*MAXV; }
-        p.x += p.vx*dt; p.y += p.vy*dt;
+      // 3) structural distance constraints (position-based, 2 relax passes)
+      for (let pass=0; pass<2; pass++){
+        for (const [ia,ib,rest] of this.links){
+          const a=pts[ia], b=pts[ib];
+          let dx=b.x-a.x, dy=b.y-a.y;
+          const d=Math.hypot(dx,dy)||1e-6;
+          const f=((d-rest)/d)*0.5*STRUCT;
+          a.x += dx*f; a.y += dy*f;
+          b.x -= dx*f; b.y -= dy*f;
+        }
       }
+
+      // 4) shape matching: pull the whole mesh toward a rotation-corrected
+      // copy of its rest shape (keeps it coherent without forbidding spin)
+      let cx=0, cy=0;
+      for (const p of pts){ cx+=p.x; cy+=p.y; }
+      cx/=pts.length; cy/=pts.length;
+      let A=0, B=0;
+      for (const p of pts){
+        const dx=p.x-cx, dy=p.y-cy;
+        A += p.qx*dx + p.qy*dy;
+        B += p.qx*dy - p.qy*dx;
+      }
+      // Damp the extracted rotation toward 0 each frame -- otherwise a hard
+      // enough drag can leave the whole jelly resting at some other stable
+      // rotation (e.g. tipped on its side) instead of righting itself, like
+      // a real jelly settled on a plate always ends up right-side up.
+      const ang = Math.atan2(B,A) * 0.90;
+      const cs=Math.cos(ang), sn=Math.sin(ang);
+      for (const p of pts){
+        const gx = cx + (cs*p.qx - sn*p.qy)*this.scale;
+        const gy = cy + (sn*p.qx + cs*p.qy)*this.scale;
+        p.x += (gx-p.x)*MATCH; p.y += (gy-p.y)*MATCH;
+      }
+      for (const s of this.seeds){
+        const gx = cx + (cs*s.qx - sn*s.qy)*this.scale;
+        const gy = cy + (sn*s.qx + cs*s.qy)*this.scale;
+        s.x += (gx-s.x)*MATCH; s.y += (gy-s.y)*MATCH;
+      }
+
+      // 4b) shape matching only restores relative shape/rotation, not
+      // position -- without this, a dragged jelly would settle wherever it
+      // was let go instead of drifting back home. Pull the whole mesh's
+      // centroid back toward its rest position (weaker than MATCH, so it
+      // glides back over a second or so rather than snapping).
+      const CENTROID_PULL = 0.025 + this.firmness*0.05;
+      const dcx = (this.x-cx)*CENTROID_PULL, dcy = (this.y-cy)*CENTROID_PULL;
+      for (const p of pts){ p.x += dcx; p.y += dcy; }
+      for (const s of this.seeds){ s.x += dcx; s.y += dcy; }
+
+      // 5) keep outline area roughly constant (incompressible-ish jelly)
+      const area = this.outlineArea(false);
+      let per = 0;
+      for (let i=0;i<this.N;i++){
+        const a=this.outlinePoint(i), b=this.outlinePoint((i+1)%this.N);
+        per += Math.hypot(b.x-a.x, b.y-a.y);
+      }
+      const d = (this.restArea-area)/(per||1) * 0.4;
+      for (let i=0;i<this.N;i++){
+        const p=this.outlinePoint(i), prev=this.outlinePoint((i-1+this.N)%this.N), next=this.outlinePoint((i+1)%this.N);
+        const tx=next.x-prev.x, ty=next.y-prev.y, l=Math.hypot(tx,ty)||1;
+        p.x += (ty/l)*d; p.y += (-tx/l)*d;
+      }
+
+      // track a little "wobble energy" reading for the spec bar
+      let e=0;
+      for (const p of pts) e += p.vx*p.vx+p.vy*p.vy;
+      this.energy = this.energy*0.9 + (Math.sqrt(e/pts.length)/this.scale)*0.1;
     }
 
     poke(px,py,strength){
-      const RADIUS = this.scale*1.4;
-      const all = this.points.concat(this.seeds);
-      for (const p of all){
-        const dx = p.x-px, dy = p.y-py;
-        const d = Math.hypot(dx,dy) || 0.0001;
-        if (d < RADIUS){
-          const w = (1 - d/RADIUS);
-          // push slightly inward then let the spring overshoot outward -> boing
-          p.vx += (dx/d)*w*strength;
-          p.vy += (dy/d)*w*strength;
-        }
-      }
+      const RADIUS = this.scale*1.15;
+      const apply=(p)=>{
+        const dx=p.x-px, dy=p.y-py, d=Math.hypot(dx,dy)||1e-4;
+        if (d<RADIUS){ const w=(1-d/RADIUS); p.vx += (dx/d)*w*strength; p.vy += (dy/d)*w*strength; }
+      };
+      for (const p of this.points) apply(p);
+      for (const s of this.seeds) apply(s);
     }
 
     hitTest(px,py){
-      // rough containment test against the current (deformed) polygon
-      const pts = this.points;
-      let inside = false;
-      for (let i=0,j=pts.length-1;i<pts.length;j=i++){
-        const xi=pts[i].x, yi=pts[i].y, xj=pts[j].x, yj=pts[j].y;
-        const intersect = ((yi>py)!==(yj>py)) && (px < (xj-xi)*(py-yi)/((yj-yi)||1e-6)+xi);
-        if (intersect) inside = !inside;
+      let inside=false;
+      for (let i=0,j=this.N-1;i<this.N;j=i++){
+        const a=this.outlinePoint(i), b=this.outlinePoint(j);
+        const hit = ((a.y>py)!==(b.y>py)) && (px < (b.x-a.x)*(py-a.y)/((b.y-a.y)||1e-6)+a.x);
+        if (hit) inside=!inside;
       }
       return inside;
     }
 
     draw(ctx){
-      const pts = this.points;
-      const n = pts.length;
-      const mid = (a,b)=>({x:(a.x+b.x)/2, y:(a.y+b.y)/2});
+      const n=this.N;
+      const mid=(a,b)=>({x:(a.x+b.x)/2,y:(a.y+b.y)/2});
+      const path=()=>{
+        ctx.beginPath();
+        let m0 = mid(this.outlinePoint(n-1), this.outlinePoint(0));
+        ctx.moveTo(m0.x,m0.y);
+        for (let i=0;i<n;i++){
+          const p=this.outlinePoint(i), next=this.outlinePoint((i+1)%n);
+          const m=mid(p,next);
+          ctx.quadraticCurveTo(p.x,p.y,m.x,m.y);
+        }
+        ctx.closePath();
+      };
 
-      // --- flesh fill (smooth closed spline through all perimeter points) ---
+      path();
+      const hue = 352+this.hueShift;
+      const g = ctx.createLinearGradient(this.x, this.y-this.scale, this.x, this.y+this.scale*1.1);
+      g.addColorStop(0,   `hsl(${hue+6} 70% 72%)`);
+      g.addColorStop(0.5, `hsl(${hue} 72% 58%)`);
+      g.addColorStop(1,   `hsl(${hue-4} 66% 46%)`);
+      ctx.fillStyle = g; ctx.fill();
+
+      ctx.save(); path(); ctx.clip();
+
+      // glassy highlight (gives it that glossy jelly-candy look)
+      ctx.globalAlpha = 0.34;
+      ctx.fillStyle = '#ffffff';
       ctx.beginPath();
-      let m0 = mid(pts[n-1], pts[0]);
-      ctx.moveTo(m0.x, m0.y);
-      for (let i=0;i<n;i++){
-        const next = pts[(i+1)%n];
-        const m = mid(pts[i], next);
-        ctx.quadraticCurveTo(pts[i].x, pts[i].y, m.x, m.y);
-      }
-      ctx.closePath();
-
-      const g = ctx.createLinearGradient(
-        this.homeX, this.homeY-this.scale, this.homeX, this.homeY+this.scale
-      );
-      g.addColorStop(0, `hsl(${350+this.hue} 78% 66%)`);
-      g.addColorStop(1, `hsl(${352+this.hue} 72% 54%)`);
-      ctx.fillStyle = g;
+      ctx.ellipse(this.x-this.scale*0.30, this.y-this.scale*0.46, this.scale*0.5, this.scale*0.26, -0.55, 0, Math.PI*2);
       ctx.fill();
-      ctx.save();
-      ctx.clip();
+      ctx.globalAlpha = 1;
 
-      // seeds, clipped inside the flesh shape
+      // seeds
       for (const s of this.seeds){
         ctx.save();
-        ctx.translate(s.x, s.y);
-        const ang = Math.atan2(s.vy, s.vx);
-        ctx.rotate(ang*0.08);
-        ctx.fillStyle = '#2a1b12';
+        ctx.translate(s.x,s.y);
+        ctx.fillStyle = 'rgba(30,18,12,0.88)';
         ctx.beginPath();
-        ctx.ellipse(0,0, this.scale*0.045, this.scale*0.075, 0, 0, Math.PI*2);
+        ctx.ellipse(0,0,this.scale*0.042,this.scale*0.07,0,0,Math.PI*2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.35)';
+        ctx.beginPath();
+        ctx.ellipse(-this.scale*0.012,-this.scale*0.022,this.scale*0.014,this.scale*0.022,0,0,Math.PI*2);
         ctx.fill();
         ctx.restore();
       }
-      ctx.restore();
 
-      // soft inner shading near the rind for a bit of depth
-      ctx.save();
-      ctx.beginPath();
-      m0 = mid(pts[n-1], pts[0]);
-      ctx.moveTo(m0.x, m0.y);
-      for (let i=0;i<n;i++){
-        const next = pts[(i+1)%n];
-        const m = mid(pts[i], next);
-        ctx.quadraticCurveTo(pts[i].x, pts[i].y, m.x, m.y);
-      }
-      ctx.closePath();
-      ctx.clip();
-      ctx.globalAlpha = 0.16;
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.ellipse(this.homeX - this.scale*0.28, this.homeY - this.scale*0.42, this.scale*0.55, this.scale*0.3, -0.5, 0, Math.PI*2);
-      ctx.fill();
-      ctx.restore();
-
-      // --- rind: thick white + green stroke, only along the arc portion ---
-      const arcPts = pts.filter(p=>p.isArc);
+      // inner rind shadow for depth near the arc
+      const arcPts=[]; for (let i=0;i<n;i++) if (this.isArc[i]) arcPts.push(this.outlinePoint(i));
       if (arcPts.length>1){
-        const drawArcStroke = (width, color)=>{
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(arcPts[0].x,arcPts[0].y);
+        for (let i=0;i<arcPts.length-1;i++){ const a=arcPts[i],b=arcPts[i+1]; const m=mid(a,b); ctx.quadraticCurveTo(a.x,a.y,m.x,m.y); }
+        ctx.lineTo(arcPts[arcPts.length-1].x, arcPts[arcPts.length-1].y);
+        ctx.lineWidth = this.scale*0.14;
+        ctx.strokeStyle = `hsla(${hue-6},60%,30%,0.28)`;
+        ctx.lineCap='round'; ctx.stroke();
+        ctx.restore();
+      }
+      ctx.restore(); // end clip
+
+      // rind: white + green stroke only along the arc
+      if (arcPts.length>1){
+        const drawStroke=(width,color)=>{
           ctx.beginPath();
-          ctx.moveTo(arcPts[0].x, arcPts[0].y);
-          for (let i=0;i<arcPts.length-1;i++){
-            const a = arcPts[i], b = arcPts[i+1];
-            const m = mid(a,b);
-            ctx.quadraticCurveTo(a.x,a.y,m.x,m.y);
-          }
+          ctx.moveTo(arcPts[0].x,arcPts[0].y);
+          for (let i=0;i<arcPts.length-1;i++){ const a=arcPts[i],b=arcPts[i+1]; const m=mid(a,b); ctx.quadraticCurveTo(a.x,a.y,m.x,m.y); }
           ctx.lineTo(arcPts[arcPts.length-1].x, arcPts[arcPts.length-1].y);
-          ctx.lineWidth = width;
-          ctx.lineCap = 'round';
-          ctx.lineJoin = 'round';
-          ctx.strokeStyle = color;
-          ctx.stroke();
+          ctx.lineWidth=width; ctx.lineCap='round'; ctx.lineJoin='round'; ctx.strokeStyle=color; ctx.stroke();
         };
-        drawArcStroke(this.scale*0.22, `hsl(${128+this.hue*0.3} 42% 38%)`);
-        drawArcStroke(this.scale*0.10, `hsl(${100} 48% 92%)`);
+        drawStroke(this.scale*0.20, `hsl(${128+this.hueShift*0.2} 36% 34%)`);
+        drawStroke(this.scale*0.09, `hsl(96 42% 90%)`);
       }
 
-      // thin outline for crispness
-      ctx.beginPath();
-      m0 = mid(pts[n-1], pts[0]);
-      ctx.moveTo(m0.x, m0.y);
-      for (let i=0;i<n;i++){
-        const next = pts[(i+1)%n];
-        const m = mid(pts[i], next);
-        ctx.quadraticCurveTo(pts[i].x, pts[i].y, m.x, m.y);
-      }
-      ctx.closePath();
-      ctx.lineWidth = Math.max(1, this.scale*0.012);
-      ctx.strokeStyle = 'rgba(30,40,25,0.18)';
+      path();
+      ctx.lineWidth = Math.max(1,this.scale*0.01);
+      ctx.strokeStyle = 'rgba(30,20,14,0.16)';
       ctx.stroke();
     }
   }
 
   // ---------- scene ----------
-  let hero, bg1, bg2;
-  function layoutBlobs(){
-    const heroScale = Math.min(W,H) * 0.30;
-    const heroPos = { x: W*0.5, y: H*0.56 };
-    if (!hero){
-      hero = new JellyMelon(heroPos.x, heroPos.y, heroScale, 0);
-      bg1 = new JellyMelon(W*0.16, H*0.22, heroScale*0.42, -8);
-      bg2 = new JellyMelon(W*0.86, H*0.20, heroScale*0.36, 10);
-    } else {
-      hero.setHome(heroPos.x, heroPos.y, heroScale);
-      bg1.setHome(W*0.16, H*0.22, heroScale*0.42);
-      bg2.setHome(W*0.86, H*0.20, heroScale*0.36);
+  let hero;
+  function layout(){
+    const scale = Math.min(W,H)*0.30;
+    const pos = {x:W*0.5, y:H*0.57};
+    if (!hero){ hero = new Jelly(pos.x,pos.y,scale); }
+    else {
+      const dx=pos.x-hero.x, dy=pos.y-hero.y, ds=scale/hero.scale;
+      hero.setHome(pos.x,pos.y,scale);
+      for (const p of hero.points){ p.x+=dx; p.y+=dy; }
+      for (const s of hero.seeds){ s.x+=dx; s.y+=dy; }
     }
   }
 
-  const melons = ()=>[hero,bg1,bg2];
-
-  // ---------- sound (synthesized, no assets) ----------
-  let audioCtx = null, soundOn = false;
-  function ensureAudio(){
-    if (!audioCtx){
-      const AC = window.AudioContext || window.webkitAudioContext;
-      if (AC) audioCtx = new AC();
-    }
-    return audioCtx;
-  }
-  function playBoing(big){
+  // ---------- sound ----------
+  let audioCtx=null, soundOn=false;
+  function ensureAudio(){ if (!audioCtx){ const AC=window.AudioContext||window.webkitAudioContext; if (AC) audioCtx=new AC(); } return audioCtx; }
+  function blip(f0,f1,dur,vol,delay=0){
     if (!soundOn) return;
-    const ac = ensureAudio();
-    if (!ac) return;
-    const t0 = ac.currentTime;
-    const osc = ac.createOscillator();
-    const gain = ac.createGain();
-    osc.type = 'sine';
-    const startF = big ? 260 : 340;
-    const endF = big ? 110 : 160;
-    osc.frequency.setValueAtTime(startF, t0);
-    osc.frequency.exponentialRampToValueAtTime(endF, t0+0.22);
-    gain.gain.setValueAtTime(0.0001, t0);
-    gain.gain.exponentialRampToValueAtTime(big?0.22:0.14, t0+0.015);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t0+0.26);
-    osc.connect(gain); gain.connect(ac.destination);
-    osc.start(t0); osc.stop(t0+0.28);
+    const ac=ensureAudio(); if (!ac) return;
+    const t0=ac.currentTime+delay;
+    const o=ac.createOscillator(), g=ac.createGain();
+    o.type='sine'; o.frequency.setValueAtTime(f0,t0); o.frequency.exponentialRampToValueAtTime(Math.max(40,f1),t0+dur);
+    g.gain.setValueAtTime(0.0001,t0); g.gain.exponentialRampToValueAtTime(vol,t0+0.014); g.gain.exponentialRampToValueAtTime(0.0001,t0+dur);
+    o.connect(g); g.connect(ac.destination); o.start(t0); o.stop(t0+dur+0.02);
+  }
+  const sfx = {
+    poke(){ blip(360+Math.random()*120, 150, 0.17, 0.20); },
+    nudge(){ blip(300,130,0.2,0.18); blip(600,220,0.09,0.06,0.03); },
+    shake(){ for (let i=0;i<4;i++) blip(220+i*26,150,0.14,0.07,i*0.14); },
+    reset(){ blip(520,760,0.12,0.12); }
+  };
+
+  // ---------- UI wiring ----------
+  const statusEl = document.getElementById('status');
+  let statusTimer = null;
+  function setStatus(text, hold){
+    statusEl.textContent = text;
+    clearTimeout(statusTimer);
+    if (hold) statusTimer = setTimeout(()=> setStatus('At rest.'), hold);
   }
 
-  // ---------- pointer interaction ----------
-  const pointer = { x:0, y:0, down:false, owner:null, downX:0, downY:0, moved:false };
-  let pokeCount = 0;
-  const pokeCountEl = document.getElementById('pokeCount');
+  const firmnessInput = document.getElementById('firmness');
+  const dampingInput  = document.getElementById('damping');
+  const firmnessVal = document.getElementById('firmnessVal');
+  const dampVal = document.getElementById('dampVal');
+  firmnessInput.addEventListener('input', ()=>{
+    hero.firmness = firmnessInput.value/100; firmnessVal.textContent = firmnessInput.value;
+  });
+  dampingInput.addEventListener('input', ()=>{
+    hero.damping = dampingInput.value/100; dampVal.textContent = dampingInput.value;
+  });
+
+  document.querySelectorAll('.swatch').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      document.querySelectorAll('.swatch').forEach(b=>b.setAttribute('aria-pressed','false'));
+      btn.setAttribute('aria-pressed','true');
+      hero.hueShift = parseFloat(btn.dataset.hue);
+    });
+  });
+
+  document.getElementById('nudgeBtn').addEventListener('click', ()=>{
+    hero.poke(hero.x, hero.y, 340);
+    sfx.nudge();
+    setStatus('Nudged. Watch it wobble.', 1600);
+  });
+  let shakeUntil = 0, shakeStart = 0;
+  document.getElementById('shakeBtn').addEventListener('click', ()=>{
+    shakeStart = performance.now(); shakeUntil = shakeStart + 900;
+    sfx.shake();
+    setStatus('Shaking the plate…', 1300);
+  });
+  document.getElementById('resetBtn').addEventListener('click', ()=>{
+    hero.reset();
+    sfx.reset();
+    setStatus('Settling onto the plate.', 1400);
+  });
+  const pauseBtn = document.getElementById('pauseBtn');
+  pauseBtn.addEventListener('click', ()=>{
+    hero.paused = !hero.paused;
+    pauseBtn.textContent = hero.paused ? 'Resume' : 'Pause';
+    pauseBtn.setAttribute('aria-pressed', String(hero.paused));
+  });
   const soundBtn = document.getElementById('soundBtn');
+  soundBtn.addEventListener('click', ()=>{
+    soundOn = !soundOn;
+    soundBtn.textContent = soundOn ? 'Sound on' : 'Sound off';
+    soundBtn.setAttribute('aria-pressed', String(soundOn));
+    if (soundOn){ const ac=ensureAudio(); if (ac && ac.state==='suspended') ac.resume(); }
+  });
 
-  function topMelonAt(x,y){
-    // hero drawn last visually isn't tracked; just test hero first (foreground), then bg2, bg1
-    if (hero.hitTest(x,y)) return hero;
-    if (bg2.hitTest(x,y)) return bg2;
-    if (bg1.hitTest(x,y)) return bg1;
-    return null;
-  }
+  // ---------- pointer ----------
+  const pointer = {x:0,y:0,down:false,owner:null,downX:0,downY:0,moved:false};
+  let pokeCount = 0;
 
   function onDown(x,y){
     pointer.x=x; pointer.y=y; pointer.down=true; pointer.moved=false;
     pointer.downX=x; pointer.downY=y;
-    pointer.owner = topMelonAt(x,y) || hero;
+    pointer.owner = hero.hitTest(x,y) ? hero : hero;
     canvas.classList.add('grabbing');
   }
   function onMove(x,y){
     pointer.x=x; pointer.y=y;
-    if (pointer.down){
-      const d = Math.hypot(x-pointer.downX, y-pointer.downY);
-      if (d>6) pointer.moved = true;
-    }
+    if (pointer.down && Math.hypot(x-pointer.downX,y-pointer.downY)>6) pointer.moved = true;
   }
   function onUp(x,y){
-    if (pointer.down && !pointer.moved && pointer.owner){
-      // treat as a poke
-      pointer.owner.poke(x,y, pointer.owner===hero? 980:760);
+    if (pointer.down && !pointer.moved){
+      hero.poke(x,y,260);
       pokeCount++;
-      pokeCountEl.textContent = 'Pokes: ' + pokeCount;
-      playBoing(pointer.owner===hero);
-      const instr = document.getElementById('instructions');
-      if (pokeCount===1) instr.textContent = 'Nice! Try dragging it around too.';
+      sfx.poke();
+      setStatus(pokeCount===1 ? 'Nice! Try dragging it too.' : 'Jiggling…', 1200);
+    } else if (pointer.down && pointer.moved){
+      setStatus('Jiggling…', 1200);
     }
-    pointer.down = false;
-    pointer.owner = null;
+    pointer.down=false; pointer.owner=null;
     canvas.classList.remove('grabbing');
   }
-
-  canvas.addEventListener('pointerdown', (e)=>{
-    canvas.setPointerCapture(e.pointerId);
-    onDown(e.clientX, e.clientY);
-  });
-  canvas.addEventListener('pointermove', (e)=> onMove(e.clientX, e.clientY));
-  window.addEventListener('pointerup', (e)=> onUp(e.clientX, e.clientY));
+  canvas.addEventListener('pointerdown', e=>{ canvas.setPointerCapture(e.pointerId); onDown(e.clientX,e.clientY); });
+  canvas.addEventListener('pointermove', e=> onMove(e.clientX,e.clientY));
+  window.addEventListener('pointerup', e=> onUp(e.clientX,e.clientY));
   window.addEventListener('pointercancel', ()=>{ pointer.down=false; pointer.owner=null; canvas.classList.remove('grabbing'); });
 
-  soundBtn.addEventListener('click', ()=>{
-    soundOn = !soundOn;
-    soundBtn.textContent = soundOn ? '🔊 Sound on' : '🔈 Sound off';
-    soundBtn.setAttribute('aria-pressed', String(soundOn));
-    if (soundOn) { const ac = ensureAudio(); if (ac && ac.state==='suspended') ac.resume(); }
-  });
-
   // ---------- idle ambient life ----------
-  let nextIdle = performance.now() + 2200;
-  function maybeIdlePoke(now){
-    if (now < nextIdle) return;
-    nextIdle = now + 3400 + Math.random()*3600;
-    const m = [hero,bg1,bg2][Math.floor(Math.random()*3)];
-    const ang = Math.random()*Math.PI*2;
-    const r = m.scale*0.4;
-    m.poke(m.homeX+Math.cos(ang)*r, m.homeY+Math.sin(ang)*r, 140);
+  let nextIdle = performance.now()+3000;
+  function maybeIdle(now){
+    if (now<nextIdle) return;
+    nextIdle = now + 4200 + Math.random()*4200;
+    const ang=Math.random()*Math.PI*2, r=hero.scale*0.35;
+    hero.poke(hero.x+Math.cos(ang)*r, hero.y+Math.sin(ang)*r, 60);
   }
 
   // ---------- main loop ----------
+  const energyVal = document.getElementById('energyVal');
   let last = performance.now();
   function frame(now){
-    let dt = (now-last)/1000;
-    last = now;
-    dt = Math.min(dt, 1/30); // avoid huge steps on tab switch
-    const sub = 2;
-    for (let i=0;i<sub;i++){
-      for (const m of melons()) m.step(dt/sub, pointer);
+    let dt=(now-last)/1000; last=now; dt=Math.min(dt,1/30);
+    const sub=2;
+
+    let shakeForce = 0;
+    if (now < shakeUntil){
+      const t=(now-shakeStart)/1000;
+      const amp = hero.scale*7*Math.max(0,1-(now-shakeStart)/900);
+      shakeForce = Math.sin(t*Math.PI*2*5)*amp;
     }
-    maybeIdlePoke(now);
+
+    for (let i=0;i<sub;i++) hero.step(dt/sub, pointer, shakeForce/sub);
+    maybeIdle(now);
 
     ctx.clearRect(0,0,W,H);
-    drawBackground();
-    bg1.draw(ctx);
-    bg2.draw(ctx);
-    hero.draw(ctx);
-
-    requestAnimationFrame(frame);
-  }
-
-  function drawBackground(){
-    // a soft ground shadow under the hero melon for grounding
     ctx.save();
-    ctx.globalAlpha = 0.14;
-    ctx.fillStyle = '#153324';
+    ctx.globalAlpha=0.16; ctx.fillStyle='#120d08';
     ctx.beginPath();
-    ctx.ellipse(hero.homeX, hero.homeY+hero.scale*0.98, hero.scale*0.95, hero.scale*0.16, 0,0,Math.PI*2);
+    ctx.ellipse(hero.x, hero.y+hero.scale*1.0, hero.scale*1.0, hero.scale*0.15, 0,0,Math.PI*2);
     ctx.fill();
     ctx.restore();
+    hero.draw(ctx);
+
+    energyVal.textContent = Math.round(Math.min(100, hero.energy*140)) + '%';
+
+    requestAnimationFrame(frame);
   }
 
   window.addEventListener('resize', resize);
   resize();
   requestAnimationFrame(frame);
+  setTimeout(()=> setStatus('No wobbles yet.'), 1200);
 })();
 </script>
 </body>
