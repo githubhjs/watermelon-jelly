@@ -15,9 +15,8 @@ CDN `<script type="importmap">`, no build step, no bundler.
   there's no scripted "resting pose," it topples and comes to rest the way an actual soft object
   would. Grab the jelly and carry it around; let go and gravity + its own squishiness take back
   over. Tap/click without dragging to poke it instead.
-- Watermelon coloring (green skin, white rind, red/pink/orange flesh) is painted per-vertex from
-  each vertex's position relative to the wedge's own 2D cross-section outline, not a texture — it
-  deforms naturally with the jelly since it's baked into the mesh data itself.
+- Watermelon coloring (green skin, white rind, red/pink/orange flesh) is a fragment shader driven
+  by each vertex's *rest* position (not a texture, and not per-vertex colors — see below).
 - `MeshPhysicalMaterial` (`transmission`/`thickness`/`clearcoat`) gives it a glossy, faintly
   translucent, candy-like look; a procedural `RoomEnvironment` provides soft studio lighting with
   no external HDRI file needed.
@@ -37,8 +36,26 @@ CDN `<script type="importmap">`, no build step, no bundler.
 - Official Three.js addons: `OrbitControls`, `BufferGeometryUtils` (`mergeVertices`, so the
   extruded wedge shares vertices across faces instead of duplicating them per-face — required for
   the jelly deformation to look continuous instead of seamed), and `RoomEnvironment` for the
-  lighting environment. Also `three-subdivide` (`LoopSubdivision`) for one smoothing pass that
-  rounds the low-poly extrusion into a plumper, jelly-like shape.
+  lighting environment. A `LoopSubdivision` smoothing pass used to run here too, to round out the
+  low-poly extrusion -- removed. It smoothed every edge uniformly, including the flat cut face and
+  the sharp rind/flesh boundary, which is what was actually making this look like a rounded blob
+  instead of a watermelon wedge (confirmed by an A/B screenshot of the undeformed rest shape with
+  and without it). Smoothness now comes only from a denser arc outline and `bevelSegments` --
+  i.e. from more actual geometric curvature where it belongs, not from a pass that rounds
+  everything indiscriminately.
+- **Rind/flesh coloring is a fragment shader, not per-vertex colors.** `ExtrudeGeometry`'s flat cap
+  faces only have vertices around their own boundary -- Three.js's earcut capping never adds
+  interior points -- so a vertex near the dome and a vertex at the tip can end up sharing one huge
+  triangle spanning the whole face. Per-vertex colors interpolate linearly across a triangle, which
+  smeared the green rind into a wide diagonal gradient covering half the face, no matter how tight
+  the distance thresholds were: the bug was *where* the color was evaluated (sparse vertices), not
+  the thresholds. A `material.onBeforeCompile` hook adds the mesh's rest position as a vertex
+  attribute/varying and evaluates the rind/flesh band per *fragment* instead, which is exact across
+  a planar triangle regardless of vertex density. The arc is a true circle
+  (`{x:sin(t), y:cos(t)}` in `buildWedgeOutline2D`), so the distance-to-rind test is six lines of
+  analytic circle distance (`abs(length(p - center) - radius)`), not a many-point nearest-search.
+  Using *rest* position rather than the live, physics-deformed position also means the rind stays
+  painted on consistently as the jelly squishes, instead of warping with it.
 - Physics: [Ammo.js](https://github.com/kripken/ammo.js) (Bullet physics compiled to WASM), the
   same build Three.js's own official `physics_ammo_volume.html` example uses — a `btSoftBody` per
   mesh vertex (1:1, since the geometry is already a single welded indexed mesh), plus a static
@@ -61,6 +78,12 @@ CDN `<script type="importmap">`, no build step, no bundler.
   `kPR` is kept at a small fixed value regardless of firmness, just enough to stop the shell caving
   in on first contact (this build's soft bodies are surface-only, no internal volume elements).
   Firmness instead drives shape-match strength plus Bullet's own link stiffness (`kAST`/`kLST`).
+  The shape-match spring's damping coefficient is deliberately well under the textbook
+  critical-damping value (a fraction of `2*sqrt(stiffness)`) -- the full value killed the bounce
+  entirely, and "springy" (Q彈) was an explicit requirement, not just settling quickly.
+- The slice is a real slice: `DEPTH` (the extrusion thickness) is well under half the
+  cross-section's own width, not nearly equal to it -- an earlier version was close to a cube and
+  read as a thick block rather than a cut wedge.
 - Dragging captures, once at grab-start, every node within range with a distance-based falloff
   weight and a fixed offset from the grab point, then blends each one toward
   "grab target + its offset" every frame (not an absolute teleport, and not re-pulled toward a

@@ -206,7 +206,6 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { LoopSubdivision } from 'https://cdn.jsdelivr.net/npm/three-subdivide@1.1.5/build/index.module.js';
 
 const stage = document.getElementById('stage');
 
@@ -275,7 +274,7 @@ window.addEventListener('resize', resize);
 // side it reads as the classic flat wedge silhouette). ----------
 function buildWedgeOutline2D(){
   const pts = [];
-  const archalf = 58*Math.PI/180, archN = 16;
+  const archalf = 58*Math.PI/180, archN = 40;
   for (let i=0;i<=archN;i++){
     const t = -archalf + (2*archalf)*(i/archN);
     pts.push({x:Math.sin(t), y:Math.cos(t), isArc:true}); // rind arc, curving over the top
@@ -293,15 +292,22 @@ function buildWedgeOutline2D(){
 const outline2D = buildWedgeOutline2D();
 
 const SCALE3D = 1.3;
-const DEPTH = 1.55;
+// Was 1.55 -- nearly equal to the cross-section's own width (2.43/SCALE3D),
+// which read as a thick block, not a slice. videoframe_12213 (the standing
+// reference wedge) shows the slice's thickness well under half its face
+// width.
+const DEPTH = 0.85;
 const shape = new THREE.Shape();
 shape.moveTo(outline2D[0].x, outline2D[0].y);
 for (let i=1;i<outline2D.length;i++) shape.lineTo(outline2D[i].x, outline2D[i].y);
 shape.closePath();
 
 let geo = new THREE.ExtrudeGeometry(shape, {
+  // steps:1 -- it's a straight prism (no spine curve), so intermediate
+  // cross-sections along depth add vertices without adding any visual
+  // detail. Smoothness on the curved rind comes from archN above instead.
   depth: DEPTH, bevelEnabled:true, bevelThickness:0.08, bevelSize:0.08,
-  bevelSegments:5, steps:10, curveSegments:1,
+  bevelSegments:5, steps:1, curveSegments:1,
 });
 geo.translate(0, 0, -DEPTH/2);
 geo.computeBoundingBox();
@@ -324,13 +330,15 @@ geo.deleteAttribute('uv');
 geo.deleteAttribute('normal');
 geo = mergeVertices(geo, 1e-4);
 geo.computeVertexNormals();
-// Round the low-poly extrusion into a genuinely plump/smooth shape (not just
-// "less jagged") -- Three.js dropped its own LoopSubdivision example, this is
-// the community successor package. One iteration only: each pass roughly
-// quadruples the triangle count, and physics runs on every vertex/edge.
-geo = LoopSubdivision.modify(geo, 1, { split: true, uvSmooth: false });
-geo = mergeVertices(geo, 1e-4);
-geo.computeVertexNormals();
+// A LoopSubdivision smoothing pass used to run here to make the low-poly
+// extrusion look "plumper" -- it did, but it also smoothed away the flat
+// cut face and the sharp rind/flesh edge right along with it, since Loop
+// subdivision rounds every edge uniformly with no concept of which ones are
+// supposed to stay flat. Confirmed by an A/B screenshot: with it removed,
+// the near-undeformed rest shape is a crisp flat-faced wedge matching the
+// reference; with it, a rounded teardrop blob. Smoothness instead comes
+// from a denser arc (archN, below) and bevelSegments/vertex normals, which
+// only round what's actually curved.
 
 const posAttr = geo.getAttribute('position');
 const restPos = Float32Array.from(posAttr.array); // qx,qy,qz per vertex (local, centered)
@@ -437,13 +445,13 @@ function shapeMatch(nodes, stiffness, dt){
   // A pure spring (no damping term of its own) still settled, just slowly --
   // ~30s to reach the same resting energy kDP alone used to reach in ~7s --
   // because it has nothing opposing its own ringing except the general kDP
-  // damping, which isn't scaled to this specific force. Added here as a
-  // proper spring-damper (PD controller). `2*sqrt(stiffness)` is the
-  // textbook critical-damping coefficient only for unit mass -- actual
-  // per-node mass here is ~1.1/VN (a few ten-thousandths), so this is
-  // nowhere near literally critical, just empirically tuned starting from
-  // that formula's shape; it's what got the 30s settle down to ~15-20s.
-  const damping = 2*Math.sqrt(stiffness);
+  // damping, which isn't scaled to this specific force. But the full
+  // textbook critical-damping coefficient (2*sqrt(stiffness), for unit
+  // mass -- actual per-node mass is ~1.1/VN, nowhere near 1) overshot the
+  // other way: "Q彈" (springy/bouncy) was an explicit ask, and that
+  // coefficient killed the bounce-back entirely. Cut to a fraction of it --
+  // enough to stop it ringing forever, not enough to erase the jiggle.
+  const damping = 2*Math.sqrt(stiffness)*0.125;
   for (let i=0;i<VN;i++){
     const node = nodes.at(i);
     const p = node.get_m_x();
@@ -468,36 +476,32 @@ function nearestOutline(x,y){
   return {dist:best, isArc};
 }
 
-const colors = new Float32Array(VN*3);
-function paint(hueShift){
-  const fleshA = new THREE.Color().setHSL(((352+hueShift)%360)/360, 0.82, 0.58);
-  const fleshB = new THREE.Color().setHSL(((352+hueShift)%360)/360, 0.86, 0.40);
-  const rindGreen = new THREE.Color().setHSL(122/360, 0.55, 0.22);
-  const rindWhite = new THREE.Color().setHSL(90/360, 0.20, 0.97);
-  // Clean, distinct bands (not one smooth continuous blend formula, which
-  // tended to wash every zone into a muddy in-between color): solid green
-  // skin, then a solid white rind ring, then a short blend into flesh.
-  const GREEN_TO = 0.11, WHITE_TO = 0.16, FLESH_FROM = 0.21;
-  for (let i=0;i<VN;i++){
-    const x=restPos[i*3], y=restPos[i*3+1];
-    const { dist, isArc } = nearestOutline(x,y);
-    const fleshT = y/(1.28*SCALE3D)*-0.5+0.5;
-    const flesh = fleshA.clone().lerp(fleshB, Math.max(0,Math.min(1,fleshT)));
-    let c = flesh;
-    if (isArc){
-      if (dist < GREEN_TO) c = rindGreen;
-      else if (dist < WHITE_TO) c = rindGreen.clone().lerp(rindWhite, (dist-GREEN_TO)/(WHITE_TO-GREEN_TO));
-      else if (dist < FLESH_FROM) c = rindWhite.clone().lerp(flesh, (dist-WHITE_TO)/(FLESH_FROM-WHITE_TO));
-      else c = flesh;
-    }
-    colors[i*3]=c.r; colors[i*3+1]=c.g; colors[i*3+2]=c.b;
-  }
-  geo.setAttribute('color', new THREE.BufferAttribute(colors,3));
-}
-paint(0);
+// ---------- rind/flesh banding: a fragment shader driven by REST position,
+// not per-vertex colors ----------
+// The cap faces only have vertices around their own boundary -- Three.js's
+// earcut capping never adds interior (Steiner) points -- so a vertex near
+// the dome and a vertex at the tip can share one huge triangle spanning the
+// whole face. Per-vertex colors interpolate linearly across that triangle,
+// which smeared the green rind into a wide diagonal gradient covering half
+// the face, however tight the distance thresholds were: the bug was in
+// *where* the color was evaluated (sparse vertices), not the thresholds.
+// Evaluating the same band formula per FRAGMENT instead makes the result
+// depend only on that pixel's own interpolated rest position, which is
+// exact across a planar triangle regardless of how few vertices it has.
+// Using REST position (not the live, physics-deformed position) also means
+// the rind stays painted on consistently as the jelly squishes, instead of
+// warping with it.
+//
+// The arc is a true circle (outline2D builds it as {sin(t),cos(t)}), so
+// this is six lines of analytic distance, not a many-point nearest-search:
+// after centering/scaling it's radius SCALE3D about (-centerX,-centerY)*SCALE3D.
+geo.setAttribute('aRest', new THREE.BufferAttribute(restPos, 3));
+
+const ARC_CX = -centerX*SCALE3D, ARC_CY = -centerY*SCALE3D, ARC_R = SCALE3D;
+const FLESH_SPAN = 1.28*SCALE3D;
+const GREEN_TO = 0.09, WHITE_TO = 0.15, FLESH_FROM = 0.22;
 
 const material = new THREE.MeshPhysicalMaterial({
-  vertexColors:true,
   roughness:0.16,
   metalness:0,
   transmission:0.5,
@@ -509,6 +513,48 @@ const material = new THREE.MeshPhysicalMaterial({
   attenuationDistance:0.9,
   envMapIntensity:0.75,
 });
+const fleshA = new THREE.Color(), fleshB = new THREE.Color();
+const rindGreen = new THREE.Color().setHSL(122/360, 0.55, 0.22);
+const rindWhite = new THREE.Color().setHSL(90/360, 0.20, 0.97);
+function paint(hueShift){
+  fleshA.setHSL(((352+hueShift)%360)/360, 0.82, 0.58);
+  fleshB.setHSL(((352+hueShift)%360)/360, 0.86, 0.40);
+  if (material.userData.shader){
+    material.userData.shader.uniforms.uFleshA.value.copy(fleshA);
+    material.userData.shader.uniforms.uFleshB.value.copy(fleshB);
+  }
+}
+material.onBeforeCompile = (shader) => {
+  shader.uniforms.uArcC = { value: new THREE.Vector2(ARC_CX, ARC_CY) };
+  shader.uniforms.uArcR = { value: ARC_R };
+  shader.uniforms.uFleshSpan = { value: FLESH_SPAN };
+  shader.uniforms.uGreenTo = { value: GREEN_TO };
+  shader.uniforms.uWhiteTo = { value: WHITE_TO };
+  shader.uniforms.uFleshFrom = { value: FLESH_FROM };
+  shader.uniforms.uFleshA = { value: fleshA.clone() };
+  shader.uniforms.uFleshB = { value: fleshB.clone() };
+  shader.uniforms.uRindGreen = { value: rindGreen.clone() };
+  shader.uniforms.uRindWhite = { value: rindWhite.clone() };
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nattribute vec3 aRest;\nvarying vec3 vRest;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRest = aRest;');
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vRest;\nuniform vec2 uArcC;\nuniform float uArcR;\nuniform float uFleshSpan;\nuniform float uGreenTo;\nuniform float uWhiteTo;\nuniform float uFleshFrom;\nuniform vec3 uFleshA;\nuniform vec3 uFleshB;\nuniform vec3 uRindGreen;\nuniform vec3 uRindWhite;')
+    .replace('#include <color_fragment>', `
+      // diffuseColor is already declared by this point in the stock shader
+      // (as vec4(diffuse, opacity), well before this chunk) -- just assign
+      // to it, don't redeclare it.
+      float fleshT = clamp(vRest.y/uFleshSpan*-0.5+0.5, 0.0, 1.0);
+      vec3 band = mix(uFleshA, uFleshB, fleshT);
+      float d = abs(length(vRest.xy - uArcC) - uArcR);
+      if (d < uGreenTo) band = uRindGreen;
+      else if (d < uWhiteTo) band = mix(uRindGreen, uRindWhite, (d-uGreenTo)/(uWhiteTo-uGreenTo));
+      else if (d < uFleshFrom) band = mix(uRindWhite, band, (d-uWhiteTo)/(uFleshFrom-uWhiteTo));
+      diffuseColor.rgb = band;
+    `);
+  material.userData.shader = shader;
+};
+paint(0);
 
 const jelly = new THREE.Mesh(geo, material);
 jelly.castShadow = true;
@@ -530,7 +576,7 @@ const seedIdx = [];
   for (let i=0;i<VN;i++){
     const x=restPos[i*3], y=restPos[i*3+1], z=restPos[i*3+2];
     const { dist, isArc } = nearestOutline(x,y);
-    if (!isArc && dist>0.22 && z>0.15) candidates.push(i);
+    if (!isArc && dist>0.06 && z>0.15) candidates.push(i);
   }
   for (let k=0;k<18 && candidates.length;k++){
     const j = Math.floor(Math.random()*candidates.length);
