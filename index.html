@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Watermelon Jelly</title>
-<meta name="description" content="An interactive jelly watermelon slice you can drag, poke, shake, and tune — a little material study.">
+<meta name="description" content="An interactive 3D jelly watermelon slice you can drag, poke, shake, and tune — a little material study.">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8D%89%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -43,8 +43,9 @@
     touch-action:none;
     -webkit-tap-highlight-color:transparent;
   }
-  canvas{ display:block; width:100%; height:100%; cursor:grab; }
-  canvas.grabbing{ cursor:grabbing; }
+  #stage{ position:fixed; inset:0; cursor:grab; }
+  #stage canvas{ display:block; width:100%; height:100%; }
+  #stage.grabbing{ cursor:grabbing; }
 
   header{
     position:fixed; left:0; right:0; top:0;
@@ -125,6 +126,10 @@
     text-decoration:none; border-bottom:1px solid var(--panel-line);
   }
   .specbar a:hover{ color:var(--accent); border-color:var(--accent); }
+  .hint{
+    position:fixed; left:0; right:0; bottom:16px; text-align:center;
+    font-size:11.5px; color:var(--ink-soft); pointer-events:none;
+  }
 
   @media (max-width:720px){
     .specimen{
@@ -136,6 +141,7 @@
     .palette{ margin-bottom:0; }
     .btnrow{ flex:1 1 100%; margin-top:2px; }
     .specbar{ display:none; }
+    .hint{ display:none; }
     header{ padding-right:16px; }
   }
   [hidden]{ display:none!important; }
@@ -143,7 +149,7 @@
 </head>
 <body>
 
-<canvas id="c"></canvas>
+<div id="stage"></div>
 
 <header>
   <p class="kicker">Material Studies · No. 7</p>
@@ -184,520 +190,443 @@
   <a href="https://github.com/githubhjs/watermelon-jelly" target="_blank" rel="noopener">source on GitHub</a>
 </div>
 
-<script>
-(function(){
-  "use strict";
+<p class="hint">Drag the jelly to squish it · drag empty space to orbit · tap to poke</p>
 
-  const canvas = document.getElementById('c');
-  const ctx = canvas.getContext('2d');
-  let W=0,H=0,DPR=Math.max(1,Math.min(2.5,window.devicePixelRatio||1));
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
-  function resize(){
-    W = window.innerWidth; H = window.innerHeight;
-    canvas.width = Math.floor(W*DPR); canvas.height = Math.floor(H*DPR);
-    canvas.style.width = W+'px'; canvas.style.height = H+'px';
-    ctx.setTransform(DPR,0,0,DPR,0,0);
-    layout();
+const stage = document.getElementById('stage');
+
+// ---------- renderer / scene / camera ----------
+const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+renderer.setPixelRatio(Math.min(2, window.devicePixelRatio||1));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+stage.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 50);
+camera.position.set(0, 1.35, 5.4);
+
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+const key = new THREE.DirectionalLight(0xfff3e6, 1.7);
+key.position.set(2.2, 3.4, 2.6);
+key.castShadow = true;
+key.shadow.mapSize.set(1024,1024);
+key.shadow.camera.left=-3; key.shadow.camera.right=3; key.shadow.camera.top=3; key.shadow.camera.bottom=-3;
+key.shadow.radius = 4;
+scene.add(key);
+scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+const fill = new THREE.DirectionalLight(0xcfe7ff, 0.35);
+fill.position.set(-3,1.2,-2);
+scene.add(fill);
+
+// plate / ground
+const plate = new THREE.Mesh(
+  new THREE.CircleGeometry(2.6, 64),
+  new THREE.MeshStandardMaterial({ color:0xfbf6ee, roughness:0.9, metalness:0 })
+);
+plate.rotation.x = -Math.PI/2;
+plate.position.y = -0.62;
+plate.receiveShadow = true;
+scene.add(plate);
+
+// ---------- controls ----------
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.enablePan = false;
+controls.minDistance = 3.2; controls.maxDistance = 8;
+controls.minPolarAngle = 0.35; controls.maxPolarAngle = Math.PI*0.52;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.6;
+controls.target.set(0, 0, 0);
+
+function resize(){
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w,h);
+  camera.aspect = w/h;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+
+// ---------- build the jelly mesh (a rounded, subdivided box) ----------
+const SIZE = { x:1.9, y:1.05, z:1.35 };
+const SEGMENTS = 7;
+const RADIUS = 0.30;
+
+let geo = new RoundedBoxGeometry(SIZE.x, SIZE.y, SIZE.z, SEGMENTS, RADIUS);
+geo = mergeVertices(geo, 1e-4);
+geo.computeVertexNormals();
+
+const posAttr = geo.getAttribute('position');
+const restPos = Float32Array.from(posAttr.array); // qx,qy,qz per vertex (local, centered)
+const VN = posAttr.count;
+const vel = new Float32Array(VN*3);
+
+// vertex colors: flesh (pink/red) in face interiors, rind (green/white) near
+// the rounded fillet regions (computed once from each vertex's rest position).
+const colors = new Float32Array(VN*3);
+const hx=SIZE.x/2, hy=SIZE.y/2, hz=SIZE.z/2;
+// Band by height, like a real wedge: a green-skin stripe along the very top,
+// a thin white rind just under it, then flesh color for the rest of the
+// block. Simple, one axis, and the band width is a direct, predictable
+// fraction of the object's height instead of an indirect multi-axis guess.
+function paint(hueShift){
+  const fleshA = new THREE.Color().setHSL(((352+hueShift)%360)/360, 0.82, 0.58);
+  const fleshB = new THREE.Color().setHSL(((352+hueShift)%360)/360, 0.86, 0.40);
+  const rindGreen = new THREE.Color().setHSL(122/360, 0.55, 0.22);
+  const rindWhite = new THREE.Color().setHSL(90/360, 0.30, 0.92);
+  const GREEN_FROM = 0.80, WHITE_FROM = 0.62; // fraction of full height (y/hy*0.5+0.5)
+  for (let i=0;i<VN;i++){
+    const y=restPos[i*3+1];
+    const t = y/hy*0.5+0.5; // 0 at bottom, 1 at top
+    const flesh = fleshA.clone().lerp(fleshB, t);
+    let c;
+    if (t < WHITE_FROM) c = flesh;
+    else if (t < GREEN_FROM) c = flesh.clone().lerp(rindWhite, (t-WHITE_FROM)/(GREEN_FROM-WHITE_FROM));
+    else c = rindWhite.clone().lerp(rindGreen, Math.min(1,(t-GREEN_FROM)/(1-GREEN_FROM)/0.6));
+    colors[i*3]=c.r; colors[i*3+1]=c.g; colors[i*3+2]=c.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors,3));
+}
+paint(0);
+
+const material = new THREE.MeshPhysicalMaterial({
+  vertexColors:true,
+  roughness:0.32,
+  metalness:0,
+  transmission:0.2,
+  thickness:0.6,
+  ior:1.32,
+  clearcoat:0.4,
+  clearcoatRoughness:0.3,
+  attenuationColor:new THREE.Color(0xff7a63),
+  attenuationDistance:1.1,
+  envMapIntensity:0.6,
+});
+
+const jelly = new THREE.Mesh(geo, material);
+jelly.castShadow = true;
+jelly.receiveShadow = false;
+scene.add(jelly);
+
+// seeds: small dark ellipsoids glued to a handful of flesh-region vertices,
+// following their vertex's live (deformed) position each frame.
+const seedIdx = [];
+(function pickSeeds(){
+  const candidates = [];
+  for (let i=0;i<VN;i++){
+    const x=restPos[i*3], y=restPos[i*3+1], z=restPos[i*3+2];
+    const nx=Math.abs(x)/hx, ny=Math.abs(y)/hy, nz=Math.abs(z)/hz;
+    if (z>0 && nz>0.92 && nx<0.62 && ny<0.62) candidates.push(i);
+  }
+  for (let k=0;k<14 && candidates.length;k++){
+    const j = Math.floor(Math.random()*candidates.length);
+    seedIdx.push(candidates.splice(j,1)[0]);
+  }
+})();
+const seedGeo = new THREE.SphereGeometry(0.045, 8, 6);
+const seedMat = new THREE.MeshStandardMaterial({ color:0x241309, roughness:0.4 });
+const seedMeshes = seedIdx.map(()=>{
+  const m = new THREE.Mesh(seedGeo, seedMat);
+  m.castShadow = true;
+  scene.add(m);
+  return m;
+});
+
+// ---------- soft-body physics: structural edge constraints + a spring
+// back toward each vertex's absolute rest position (no rotation-matching
+// needed -- the camera orbits the object, the object itself doesn't need
+// to tumble). ----------
+const edgeSet = new Set();
+const edges = []; // [a,b,restLen]
+const index = geo.getIndex();
+function addEdge(a,b){
+  const key = a<b ? a*VN+b : b*VN+a;
+  if (edgeSet.has(key)) return;
+  edgeSet.add(key);
+  const dx=restPos[a*3]-restPos[b*3], dy=restPos[a*3+1]-restPos[b*3+1], dz=restPos[a*3+2]-restPos[b*3+2];
+  edges.push([a,b,Math.hypot(dx,dy,dz)]);
+}
+for (let i=0;i<index.count;i+=3){
+  const a=index.getX(i), b=index.getX(i+1), c=index.getX(i+2);
+  addEdge(a,b); addEdge(b,c); addEdge(c,a);
+}
+
+const state = {
+  firmness: 0.52,
+  damping: 0.46,
+  paused: false,
+  hueShift: 0,
+};
+
+function stepPhysics(dt, dragInfo, shakeVec){
+  if (state.paused) return;
+  const pos = posAttr.array;
+  const STRUCT = 0.22 + state.firmness*0.55;
+  const HOME = 0.16 + state.firmness*0.3;
+  const DAMP = 1 - (0.01 + state.damping*0.065);
+
+  const MAXV = 9;
+  for (let i=0;i<VN;i++){
+    let vx=vel[i*3]*DAMP, vy=vel[i*3+1]*DAMP, vz=vel[i*3+2]*DAMP;
+    if (shakeVec){ vx+=shakeVec.x*dt; vy+=shakeVec.y*dt; vz+=shakeVec.z*dt; }
+    const sp = Math.hypot(vx,vy,vz);
+    if (sp>MAXV){ const s=MAXV/sp; vx*=s; vy*=s; vz*=s; }
+    vel[i*3]=vx; vel[i*3+1]=vy; vel[i*3+2]=vz;
+    pos[i*3]  += vx*dt;
+    pos[i*3+1]+= vy*dt;
+    pos[i*3+2]+= vz*dt;
   }
 
-  // ---------- wedge silhouette (local unit coords) ----------
-  function buildWedgeOutline(){
-    const pts = [];
-    const archalf = 58*Math.PI/180, archN = 14;
-    for (let i=0;i<=archN;i++){
-      const t = -archalf + (2*archalf)*(i/archN);
-      pts.push({x:Math.sin(t), y:-Math.cos(t), isArc:true});
-    }
-    const archEnd = pts[pts.length-1];
-    const tip = {x:0,y:1.28};
-    pts.push({x:archEnd.x*0.62, y:archEnd.y*0.25+tip.y*0.55, isArc:false});
-    pts.push({x:0.07, y:tip.y*0.97, isArc:false});
-    pts.push({x:0,    y:tip.y,     isArc:false});
-    pts.push({x:-0.07,y:tip.y*0.97, isArc:false});
-    const archStart = pts[0];
-    pts.push({x:archStart.x*0.62, y:archStart.y*0.25+tip.y*0.55, isArc:false});
-    return pts;
-  }
-
-  const SEED_LOCAL = [
-    [-0.28,-0.18],[0.05,-0.32],[0.33,-0.12],[-0.08,-0.52],[0.22,-0.46],
-    [-0.42, 0.10],[0.40, 0.14],[-0.18, 0.28],[0.14, 0.42],[0.00, 0.05]
-  ];
-
-  // ---------- soft-body jelly: a radial mesh of concentric rings from a
-  // central hub out to the wedge outline, held together by structural links
-  // (radial + circumferential) and pulled, as a whole, toward a rotation-
-  // corrected copy of its own rest shape ("shape matching"). ----------
-  const RING_FRACS = [0.26, 0.48, 0.68, 0.85, 1.0]; // last = outline itself
-
-  class Jelly{
-    constructor(x,y,scale){
-      this.x=x; this.y=y; this.scale=scale;
-      this.firmness = 0.52;   // 0..1
-      this.damping  = 0.46;   // 0..1
-      this.hueShift = 0;
-      this.paused = false;
-      this.energy = 0;
-
-      const outline = buildWedgeOutline();
-      this.N = outline.length;
-      this.isArc = outline.map(p=>p.isArc);
-
-      // local (unscaled) hub position: centroid of the outline
-      let hx=0, hy=0;
-      for (const p of outline){ hx+=p.x; hy+=p.y; }
-      hx/=outline.length; hy/=outline.length;
-      this.hubLocal = {x:hx, y:hy};
-
-      // build all mesh points: index 0 = hub, then ring*N + i for ring 0..K-1
-      this.K = RING_FRACS.length;
-      this.points = [];
-      const mkPoint = (lx,ly)=>({
-        qx:(lx-hx), qy:(ly-hy),      // offset from hub, in the REST frame (for shape matching)
-        x:0, y:0, vx:0, vy:0
-      });
-      this.points.push(mkPoint(hx,hy)); // hub = index 0
-      for (let k=0;k<this.K;k++){
-        for (let i=0;i<this.N;i++){
-          const o = outline[i];
-          const lx = hx + (o.x-hx)*RING_FRACS[k];
-          const ly = hy + (o.y-hy)*RING_FRACS[k];
-          this.points.push(mkPoint(lx,ly));
-        }
+  if (dragInfo){
+    const R = 0.7;
+    for (let i=0;i<VN;i++){
+      const dx=dragInfo.x-pos[i*3], dy=dragInfo.y-pos[i*3+1], dz=dragInfo.z-pos[i*3+2];
+      const d = Math.hypot(dx,dy,dz);
+      if (d<R){
+        const w=(1-d/R);
+        vel[i*3]   += dx*w*0.9*dt*60;
+        vel[i*3+1] += dy*w*0.9*dt*60;
+        vel[i*3+2] += dz*w*0.9*dt*60;
       }
-      this.idx = (k,i)=> 1 + k*this.N + i; // k in [0..K-1], i in [0..N-1]
-      this.seeds = SEED_LOCAL.map(([sx,sy])=>({ qx:sx-hx, qy:sy-hy, x:0,y:0, vx:0,vy:0 }));
-
-      this.setHome(x,y,scale); // also places points at rest first time
-      for (const p of this.points){ p.x=this.homeOf(p); p.y=this.homeOfY(p); }
-      for (const s of this.seeds){ s.x=this.homeOf(s); s.y=this.homeOfY(s); }
-
-      // structural links: [a,b,restLen]
-      this.links = [];
-      const link=(a,b)=>{
-        const A=this.points[a], B=this.points[b];
-        const dx=(A.qx-B.qx)*scale, dy=(A.qy-B.qy)*scale;
-        this.links.push([a,b,Math.hypot(dx,dy)]);
-      };
-      for (let i=0;i<this.N;i++) link(0, this.idx(0,i));                 // hub -> ring0
-      for (let k=0;k<this.K;k++){
-        for (let i=0;i<this.N;i++){
-          if (k<this.K-1) link(this.idx(k,i), this.idx(k+1,i));          // radial
-          link(this.idx(k,i), this.idx(k,(i+1)%this.N));                 // circumferential
-        }
-      }
-      this.restArea = this.outlineArea(true);
-
-      let minQy=Infinity, maxQy=-Infinity;
-      for (const p of this.points){ if (p.qy<minQy) minQy=p.qy; if (p.qy>maxQy) maxQy=p.qy; }
-      this._minQy = minQy; this._maxQySpan = (maxQy-minQy)||1;
-    }
-
-    shakeWeight(p){
-      return 0.25 + 0.75*Math.max(0, Math.min(1, (p.qy-this._minQy)/this._maxQySpan));
-    }
-
-    homeOf(p){ return this.x + p.qx*this.scale; }
-    homeOfY(p){ return this.y + p.qy*this.scale; }
-
-    setHome(x,y,scale){ this.x=x; this.y=y; this.scale=scale; }
-
-    outlinePoint(i){ return this.points[this.idx(this.K-1,i)]; }
-
-    outlineArea(rest){
-      let a=0;
-      for (let i=0;i<this.N;i++){
-        const p=this.outlinePoint(i), q=this.outlinePoint((i+1)%this.N);
-        const px = rest? this.homeOf(p):p.x, py = rest? this.homeOfY(p):p.y;
-        const qx = rest? this.homeOf(q):q.x, qy = rest? this.homeOfY(q):q.y;
-        a += px*qy - qx*py;
-      }
-      return a/2;
-    }
-
-    allPoints(){ return this.points; }
-
-    reset(){
-      for (const p of this.points){ p.x=this.homeOf(p); p.y=this.homeOfY(p); p.vx=0; p.vy=0; }
-      for (const s of this.seeds){ s.x=this.homeOf(s); s.y=this.homeOfY(s); s.vx=0; s.vy=0; }
-    }
-
-    step(dt, pointer, shakeForce){
-      if (this.paused) return;
-      const STRUCT = 0.25 + this.firmness*0.55;     // constraint stiffness
-      const DAMP = 1 - (0.012 + this.damping*0.07); // per-substep velocity retention
-      const MATCH = 0.06 + this.firmness*0.16;      // shape-matching pull
-
-      const pts = this.points;
-
-      // 1) integrate velocity -> position, with damping
-      for (const p of pts){
-        p.vx *= DAMP; p.vy *= DAMP;
-        // tip-of-the-wedge points (closer to the plate) feel a plate-shake
-        // fully; the rind near the top lags behind for an inertial slosh
-        // instead of the whole shape just translating rigidly.
-        if (shakeForce) p.vx += shakeForce*this.shakeWeight(p)*dt;
-        p.x += p.vx*dt; p.y += p.vy*dt;
-      }
-      for (const s of this.seeds){
-        s.vx *= DAMP; s.vy *= DAMP;
-        if (shakeForce) s.vx += shakeForce*this.shakeWeight(s)*dt;
-        s.x += s.vx*dt; s.y += s.vy*dt;
-      }
-
-      // 2) pointer drag: proportional pull toward pointer for nearby points
-      if (pointer && pointer.down && pointer.owner === this){
-        const RADIUS = this.scale*1.3, PULL = 10;
-        for (const p of pts){
-          const dx=pointer.x-p.x, dy=pointer.y-p.y, d=Math.hypot(dx,dy);
-          if (d<RADIUS){ const w=1-d/RADIUS; p.vx += dx*w*PULL*dt*60; p.vy += dy*w*PULL*dt*60; }
-        }
-        for (const s of this.seeds){
-          const dx=pointer.x-s.x, dy=pointer.y-s.y, d=Math.hypot(dx,dy);
-          if (d<RADIUS){ const w=1-d/RADIUS; s.vx += dx*w*PULL*dt*60; s.vy += dy*w*PULL*dt*60; }
-        }
-      }
-
-      // 3) structural distance constraints (position-based, 2 relax passes)
-      for (let pass=0; pass<2; pass++){
-        for (const [ia,ib,rest] of this.links){
-          const a=pts[ia], b=pts[ib];
-          let dx=b.x-a.x, dy=b.y-a.y;
-          const d=Math.hypot(dx,dy)||1e-6;
-          const f=((d-rest)/d)*0.5*STRUCT;
-          a.x += dx*f; a.y += dy*f;
-          b.x -= dx*f; b.y -= dy*f;
-        }
-      }
-
-      // 4) shape matching: pull the whole mesh toward a rotation-corrected
-      // copy of its rest shape (keeps it coherent without forbidding spin)
-      let cx=0, cy=0;
-      for (const p of pts){ cx+=p.x; cy+=p.y; }
-      cx/=pts.length; cy/=pts.length;
-      let A=0, B=0;
-      for (const p of pts){
-        const dx=p.x-cx, dy=p.y-cy;
-        A += p.qx*dx + p.qy*dy;
-        B += p.qx*dy - p.qy*dx;
-      }
-      // Damp the extracted rotation toward 0 each frame -- otherwise a hard
-      // enough drag can leave the whole jelly resting at some other stable
-      // rotation (e.g. tipped on its side) instead of righting itself, like
-      // a real jelly settled on a plate always ends up right-side up.
-      const ang = Math.atan2(B,A) * 0.90;
-      const cs=Math.cos(ang), sn=Math.sin(ang);
-      for (const p of pts){
-        const gx = cx + (cs*p.qx - sn*p.qy)*this.scale;
-        const gy = cy + (sn*p.qx + cs*p.qy)*this.scale;
-        p.x += (gx-p.x)*MATCH; p.y += (gy-p.y)*MATCH;
-      }
-      for (const s of this.seeds){
-        const gx = cx + (cs*s.qx - sn*s.qy)*this.scale;
-        const gy = cy + (sn*s.qx + cs*s.qy)*this.scale;
-        s.x += (gx-s.x)*MATCH; s.y += (gy-s.y)*MATCH;
-      }
-
-      // 4b) shape matching only restores relative shape/rotation, not
-      // position -- without this, a dragged jelly would settle wherever it
-      // was let go instead of drifting back home. Pull the whole mesh's
-      // centroid back toward its rest position (weaker than MATCH, so it
-      // glides back over a second or so rather than snapping).
-      const CENTROID_PULL = 0.025 + this.firmness*0.05;
-      const dcx = (this.x-cx)*CENTROID_PULL, dcy = (this.y-cy)*CENTROID_PULL;
-      for (const p of pts){ p.x += dcx; p.y += dcy; }
-      for (const s of this.seeds){ s.x += dcx; s.y += dcy; }
-
-      // 5) keep outline area roughly constant (incompressible-ish jelly)
-      const area = this.outlineArea(false);
-      let per = 0;
-      for (let i=0;i<this.N;i++){
-        const a=this.outlinePoint(i), b=this.outlinePoint((i+1)%this.N);
-        per += Math.hypot(b.x-a.x, b.y-a.y);
-      }
-      const d = (this.restArea-area)/(per||1) * 0.4;
-      for (let i=0;i<this.N;i++){
-        const p=this.outlinePoint(i), prev=this.outlinePoint((i-1+this.N)%this.N), next=this.outlinePoint((i+1)%this.N);
-        const tx=next.x-prev.x, ty=next.y-prev.y, l=Math.hypot(tx,ty)||1;
-        p.x += (ty/l)*d; p.y += (-tx/l)*d;
-      }
-
-      // track a little "wobble energy" reading for the spec bar
-      let e=0;
-      for (const p of pts) e += p.vx*p.vx+p.vy*p.vy;
-      this.energy = this.energy*0.9 + (Math.sqrt(e/pts.length)/this.scale)*0.1;
-    }
-
-    poke(px,py,strength){
-      const RADIUS = this.scale*1.15;
-      const apply=(p)=>{
-        const dx=p.x-px, dy=p.y-py, d=Math.hypot(dx,dy)||1e-4;
-        if (d<RADIUS){ const w=(1-d/RADIUS); p.vx += (dx/d)*w*strength; p.vy += (dy/d)*w*strength; }
-      };
-      for (const p of this.points) apply(p);
-      for (const s of this.seeds) apply(s);
-    }
-
-    hitTest(px,py){
-      let inside=false;
-      for (let i=0,j=this.N-1;i<this.N;j=i++){
-        const a=this.outlinePoint(i), b=this.outlinePoint(j);
-        const hit = ((a.y>py)!==(b.y>py)) && (px < (b.x-a.x)*(py-a.y)/((b.y-a.y)||1e-6)+a.x);
-        if (hit) inside=!inside;
-      }
-      return inside;
-    }
-
-    draw(ctx){
-      const n=this.N;
-      const mid=(a,b)=>({x:(a.x+b.x)/2,y:(a.y+b.y)/2});
-      const path=()=>{
-        ctx.beginPath();
-        let m0 = mid(this.outlinePoint(n-1), this.outlinePoint(0));
-        ctx.moveTo(m0.x,m0.y);
-        for (let i=0;i<n;i++){
-          const p=this.outlinePoint(i), next=this.outlinePoint((i+1)%n);
-          const m=mid(p,next);
-          ctx.quadraticCurveTo(p.x,p.y,m.x,m.y);
-        }
-        ctx.closePath();
-      };
-
-      path();
-      const hue = 352+this.hueShift;
-      const g = ctx.createLinearGradient(this.x, this.y-this.scale, this.x, this.y+this.scale*1.1);
-      g.addColorStop(0,   `hsl(${hue+6} 70% 72%)`);
-      g.addColorStop(0.5, `hsl(${hue} 72% 58%)`);
-      g.addColorStop(1,   `hsl(${hue-4} 66% 46%)`);
-      ctx.fillStyle = g; ctx.fill();
-
-      ctx.save(); path(); ctx.clip();
-
-      // glassy highlight (gives it that glossy jelly-candy look)
-      ctx.globalAlpha = 0.34;
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.ellipse(this.x-this.scale*0.30, this.y-this.scale*0.46, this.scale*0.5, this.scale*0.26, -0.55, 0, Math.PI*2);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-
-      // seeds
-      for (const s of this.seeds){
-        ctx.save();
-        ctx.translate(s.x,s.y);
-        ctx.fillStyle = 'rgba(30,18,12,0.88)';
-        ctx.beginPath();
-        ctx.ellipse(0,0,this.scale*0.042,this.scale*0.07,0,0,Math.PI*2);
-        ctx.fill();
-        ctx.fillStyle = 'rgba(255,255,255,0.35)';
-        ctx.beginPath();
-        ctx.ellipse(-this.scale*0.012,-this.scale*0.022,this.scale*0.014,this.scale*0.022,0,0,Math.PI*2);
-        ctx.fill();
-        ctx.restore();
-      }
-
-      // inner rind shadow for depth near the arc
-      const arcPts=[]; for (let i=0;i<n;i++) if (this.isArc[i]) arcPts.push(this.outlinePoint(i));
-      if (arcPts.length>1){
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(arcPts[0].x,arcPts[0].y);
-        for (let i=0;i<arcPts.length-1;i++){ const a=arcPts[i],b=arcPts[i+1]; const m=mid(a,b); ctx.quadraticCurveTo(a.x,a.y,m.x,m.y); }
-        ctx.lineTo(arcPts[arcPts.length-1].x, arcPts[arcPts.length-1].y);
-        ctx.lineWidth = this.scale*0.14;
-        ctx.strokeStyle = `hsla(${hue-6},60%,30%,0.28)`;
-        ctx.lineCap='round'; ctx.stroke();
-        ctx.restore();
-      }
-      ctx.restore(); // end clip
-
-      // rind: white + green stroke only along the arc
-      if (arcPts.length>1){
-        const drawStroke=(width,color)=>{
-          ctx.beginPath();
-          ctx.moveTo(arcPts[0].x,arcPts[0].y);
-          for (let i=0;i<arcPts.length-1;i++){ const a=arcPts[i],b=arcPts[i+1]; const m=mid(a,b); ctx.quadraticCurveTo(a.x,a.y,m.x,m.y); }
-          ctx.lineTo(arcPts[arcPts.length-1].x, arcPts[arcPts.length-1].y);
-          ctx.lineWidth=width; ctx.lineCap='round'; ctx.lineJoin='round'; ctx.strokeStyle=color; ctx.stroke();
-        };
-        drawStroke(this.scale*0.20, `hsl(${128+this.hueShift*0.2} 36% 34%)`);
-        drawStroke(this.scale*0.09, `hsl(96 42% 90%)`);
-      }
-
-      path();
-      ctx.lineWidth = Math.max(1,this.scale*0.01);
-      ctx.strokeStyle = 'rgba(30,20,14,0.16)';
-      ctx.stroke();
     }
   }
 
-  // ---------- scene ----------
-  let hero;
-  function layout(){
-    const scale = Math.min(W,H)*0.30;
-    const pos = {x:W*0.5, y:H*0.57};
-    if (!hero){ hero = new Jelly(pos.x,pos.y,scale); }
-    else {
-      const dx=pos.x-hero.x, dy=pos.y-hero.y, ds=scale/hero.scale;
-      hero.setHome(pos.x,pos.y,scale);
-      for (const p of hero.points){ p.x+=dx; p.y+=dy; }
-      for (const s of hero.seeds){ s.x+=dx; s.y+=dy; }
+  for (let pass=0; pass<4; pass++){
+    for (const [a,b,rest] of edges){
+      let dx=pos[b*3]-pos[a*3], dy=pos[b*3+1]-pos[a*3+1], dz=pos[b*3+2]-pos[a*3+2];
+      const d = Math.hypot(dx,dy,dz)||1e-6;
+      const f = ((d-rest)/d)*0.5*STRUCT;
+      pos[a*3]  += dx*f; pos[a*3+1]  += dy*f; pos[a*3+2]  += dz*f;
+      pos[b*3]  -= dx*f; pos[b*3+1]  -= dy*f; pos[b*3+2]  -= dz*f;
     }
   }
 
-  // ---------- sound ----------
-  let audioCtx=null, soundOn=false;
-  function ensureAudio(){ if (!audioCtx){ const AC=window.AudioContext||window.webkitAudioContext; if (AC) audioCtx=new AC(); } return audioCtx; }
-  function blip(f0,f1,dur,vol,delay=0){
-    if (!soundOn) return;
-    const ac=ensureAudio(); if (!ac) return;
-    const t0=ac.currentTime+delay;
-    const o=ac.createOscillator(), g=ac.createGain();
-    o.type='sine'; o.frequency.setValueAtTime(f0,t0); o.frequency.exponentialRampToValueAtTime(Math.max(40,f1),t0+dur);
-    g.gain.setValueAtTime(0.0001,t0); g.gain.exponentialRampToValueAtTime(vol,t0+0.014); g.gain.exponentialRampToValueAtTime(0.0001,t0+dur);
-    o.connect(g); g.connect(ac.destination); o.start(t0); o.stop(t0+dur+0.02);
-  }
-  const sfx = {
-    poke(){ blip(360+Math.random()*120, 150, 0.17, 0.20); },
-    nudge(){ blip(300,130,0.2,0.18); blip(600,220,0.09,0.06,0.03); },
-    shake(){ for (let i=0;i<4;i++) blip(220+i*26,150,0.14,0.07,i*0.14); },
-    reset(){ blip(520,760,0.12,0.12); }
-  };
-
-  // ---------- UI wiring ----------
-  const statusEl = document.getElementById('status');
-  let statusTimer = null;
-  function setStatus(text, hold){
-    statusEl.textContent = text;
-    clearTimeout(statusTimer);
-    if (hold) statusTimer = setTimeout(()=> setStatus('At rest.'), hold);
+  // gentle pull back toward each vertex's own absolute rest position
+  for (let i=0;i<VN;i++){
+    pos[i*3]   += (restPos[i*3]  -pos[i*3])  *HOME;
+    pos[i*3+1] += (restPos[i*3+1]-pos[i*3+1])*HOME;
+    pos[i*3+2] += (restPos[i*3+2]-pos[i*3+2])*HOME;
   }
 
-  const firmnessInput = document.getElementById('firmness');
-  const dampingInput  = document.getElementById('damping');
-  const firmnessVal = document.getElementById('firmnessVal');
-  const dampVal = document.getElementById('dampVal');
-  firmnessInput.addEventListener('input', ()=>{
-    hero.firmness = firmnessInput.value/100; firmnessVal.textContent = firmnessInput.value;
-  });
-  dampingInput.addEventListener('input', ()=>{
-    hero.damping = dampingInput.value/100; dampVal.textContent = dampingInput.value;
-  });
+  posAttr.needsUpdate = true;
+  geo.computeVertexNormals();
 
-  document.querySelectorAll('.swatch').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      document.querySelectorAll('.swatch').forEach(b=>b.setAttribute('aria-pressed','false'));
-      btn.setAttribute('aria-pressed','true');
-      hero.hueShift = parseFloat(btn.dataset.hue);
-    });
-  });
-
-  document.getElementById('nudgeBtn').addEventListener('click', ()=>{
-    hero.poke(hero.x, hero.y, 340);
-    sfx.nudge();
-    setStatus('Nudged. Watch it wobble.', 1600);
-  });
-  let shakeUntil = 0, shakeStart = 0;
-  document.getElementById('shakeBtn').addEventListener('click', ()=>{
-    shakeStart = performance.now(); shakeUntil = shakeStart + 900;
-    sfx.shake();
-    setStatus('Shaking the plate…', 1300);
-  });
-  document.getElementById('resetBtn').addEventListener('click', ()=>{
-    hero.reset();
-    sfx.reset();
-    setStatus('Settling onto the plate.', 1400);
-  });
-  const pauseBtn = document.getElementById('pauseBtn');
-  pauseBtn.addEventListener('click', ()=>{
-    hero.paused = !hero.paused;
-    pauseBtn.textContent = hero.paused ? 'Resume' : 'Pause';
-    pauseBtn.setAttribute('aria-pressed', String(hero.paused));
-  });
-  const soundBtn = document.getElementById('soundBtn');
-  soundBtn.addEventListener('click', ()=>{
-    soundOn = !soundOn;
-    soundBtn.textContent = soundOn ? 'Sound on' : 'Sound off';
-    soundBtn.setAttribute('aria-pressed', String(soundOn));
-    if (soundOn){ const ac=ensureAudio(); if (ac && ac.state==='suspended') ac.resume(); }
-  });
-
-  // ---------- pointer ----------
-  const pointer = {x:0,y:0,down:false,owner:null,downX:0,downY:0,moved:false};
-  let pokeCount = 0;
-
-  function onDown(x,y){
-    pointer.x=x; pointer.y=y; pointer.down=true; pointer.moved=false;
-    pointer.downX=x; pointer.downY=y;
-    pointer.owner = hero.hitTest(x,y) ? hero : hero;
-    canvas.classList.add('grabbing');
+  for (let k=0;k<seedIdx.length;k++){
+    const i = seedIdx[k];
+    seedMeshes[k].position.set(pos[i*3]*1.02, pos[i*3+1]*1.02, pos[i*3+2]*1.02);
   }
-  function onMove(x,y){
-    pointer.x=x; pointer.y=y;
-    if (pointer.down && Math.hypot(x-pointer.downX,y-pointer.downY)>6) pointer.moved = true;
+
+  let e=0;
+  for (let i=0;i<VN;i++) e += vel[i*3]**2+vel[i*3+1]**2+vel[i*3+2]**2;
+  energySmoothed = energySmoothed*0.9 + (Math.sqrt(e/VN))*0.1;
+}
+let energySmoothed = 0;
+
+function pokeAt(x,y,z,strength){
+  const pos = posAttr.array;
+  const R = 0.95;
+  for (let i=0;i<VN;i++){
+    const dx=pos[i*3]-x, dy=pos[i*3+1]-y, dz=pos[i*3+2]-z;
+    const d = Math.hypot(dx,dy,dz)||1e-4;
+    if (d<R){
+      const w=(1-d/R);
+      vel[i*3]  += (dx/d)*w*strength;
+      vel[i*3+1]+= (dy/d)*w*strength;
+      vel[i*3+2]+= (dz/d)*w*strength;
+    }
   }
-  function onUp(x,y){
-    if (pointer.down && !pointer.moved){
-      hero.poke(x,y,260);
+}
+function resetJelly(){
+  posAttr.array.set(restPos);
+  vel.fill(0);
+  posAttr.needsUpdate = true;
+  geo.computeVertexNormals();
+}
+
+// ---------- sound ----------
+let audioCtx=null, soundOn=false;
+function ensureAudio(){ if (!audioCtx){ const AC=window.AudioContext||window.webkitAudioContext; if (AC) audioCtx=new AC(); } return audioCtx; }
+function blip(f0,f1,dur,vol,delay=0){
+  if (!soundOn) return;
+  const ac=ensureAudio(); if (!ac) return;
+  const t0=ac.currentTime+delay;
+  const o=ac.createOscillator(), g=ac.createGain();
+  o.type='sine'; o.frequency.setValueAtTime(f0,t0); o.frequency.exponentialRampToValueAtTime(Math.max(40,f1),t0+dur);
+  g.gain.setValueAtTime(0.0001,t0); g.gain.exponentialRampToValueAtTime(vol,t0+0.014); g.gain.exponentialRampToValueAtTime(0.0001,t0+dur);
+  o.connect(g); g.connect(ac.destination); o.start(t0); o.stop(t0+dur+0.02);
+}
+const sfx = {
+  poke(){ blip(360+Math.random()*120, 150, 0.17, 0.20); },
+  nudge(){ blip(300,130,0.2,0.18); blip(600,220,0.09,0.06,0.03); },
+  shake(){ for (let i=0;i<4;i++) blip(220+i*26,150,0.14,0.07,i*0.14); },
+  reset(){ blip(520,760,0.12,0.12); }
+};
+
+// ---------- UI wiring ----------
+const statusEl = document.getElementById('status');
+let statusTimer=null;
+function setStatus(text, hold){
+  statusEl.textContent=text;
+  clearTimeout(statusTimer);
+  if (hold) statusTimer=setTimeout(()=>setStatus('At rest.'), hold);
+}
+
+document.getElementById('firmness').addEventListener('input', e=>{
+  state.firmness = e.target.value/100;
+  document.getElementById('firmnessVal').textContent = e.target.value;
+});
+document.getElementById('damping').addEventListener('input', e=>{
+  state.damping = e.target.value/100;
+  document.getElementById('dampVal').textContent = e.target.value;
+});
+document.querySelectorAll('.swatch').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('.swatch').forEach(b=>b.setAttribute('aria-pressed','false'));
+    btn.setAttribute('aria-pressed','true');
+    paint(parseFloat(btn.dataset.hue));
+  });
+});
+document.getElementById('nudgeBtn').addEventListener('click', ()=>{
+  pokeAt(0,0,0.6, 5.2);
+  sfx.nudge();
+  setStatus('Nudged. Watch it wobble.', 1600);
+});
+let shakeUntil=0, shakeStart=0;
+document.getElementById('shakeBtn').addEventListener('click', ()=>{
+  shakeStart = performance.now(); shakeUntil = shakeStart+900;
+  sfx.shake();
+  setStatus('Shaking the plate…', 1300);
+});
+document.getElementById('resetBtn').addEventListener('click', ()=>{
+  resetJelly(); sfx.reset();
+  setStatus('Settling onto the plate.', 1400);
+});
+const pauseBtn = document.getElementById('pauseBtn');
+pauseBtn.addEventListener('click', ()=>{
+  state.paused = !state.paused;
+  pauseBtn.textContent = state.paused ? 'Resume' : 'Pause';
+  pauseBtn.setAttribute('aria-pressed', String(state.paused));
+});
+const soundBtn = document.getElementById('soundBtn');
+soundBtn.addEventListener('click', ()=>{
+  soundOn = !soundOn;
+  soundBtn.textContent = soundOn ? 'Sound on' : 'Sound off';
+  soundBtn.setAttribute('aria-pressed', String(soundOn));
+  if (soundOn){ const ac=ensureAudio(); if (ac && ac.state==='suspended') ac.resume(); }
+});
+
+// ---------- pointer: raycast to tell a jelly-drag from a camera-orbit ----------
+const raycaster = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+const dragPlane = new THREE.Plane();
+const dragPoint = new THREE.Vector3();
+let dragging = false;
+let pokeCount = 0;
+
+function toNDC(x,y){
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.x = ((x-r.left)/r.width)*2-1;
+  ndc.y = -((y-r.top)/r.height)*2+1;
+}
+
+let downX=0, downY=0, moved=false;
+renderer.domElement.addEventListener('pointerdown', (e)=>{
+  downX=e.clientX; downY=e.clientY; moved=false;
+  toNDC(e.clientX,e.clientY);
+  raycaster.setFromCamera(ndc, camera);
+  const hit = raycaster.intersectObject(jelly, false)[0];
+  if (hit){
+    dragging = true;
+    controls.enabled = false;
+    controls.autoRotate = false;
+    stage.classList.add('grabbing');
+    dragPlane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()).negate(), hit.point);
+    dragPoint.copy(hit.point);
+  }
+});
+window.addEventListener('pointermove', (e)=>{
+  if (Math.hypot(e.clientX-downX, e.clientY-downY)>6) moved=true;
+  if (!dragging) return;
+  toNDC(e.clientX,e.clientY);
+  raycaster.setFromCamera(ndc, camera);
+  const p = new THREE.Vector3();
+  raycaster.ray.intersectPlane(dragPlane, p);
+  if (p) dragPoint.copy(p);
+});
+window.addEventListener('pointerup', (e)=>{
+  if (dragging && !moved){
+    toNDC(e.clientX,e.clientY);
+    raycaster.setFromCamera(ndc, camera);
+    const hit = raycaster.intersectObject(jelly,false)[0];
+    if (hit){
+      pokeAt(hit.point.x,hit.point.y,hit.point.z, 3.4);
       pokeCount++;
       sfx.poke();
       setStatus(pokeCount===1 ? 'Nice! Try dragging it too.' : 'Jiggling…', 1200);
-    } else if (pointer.down && pointer.moved){
-      setStatus('Jiggling…', 1200);
     }
-    pointer.down=false; pointer.owner=null;
-    canvas.classList.remove('grabbing');
+  } else if (dragging && moved){
+    setStatus('Jiggling…', 1200);
   }
-  canvas.addEventListener('pointerdown', e=>{ canvas.setPointerCapture(e.pointerId); onDown(e.clientX,e.clientY); });
-  canvas.addEventListener('pointermove', e=> onMove(e.clientX,e.clientY));
-  window.addEventListener('pointerup', e=> onUp(e.clientX,e.clientY));
-  window.addEventListener('pointercancel', ()=>{ pointer.down=false; pointer.owner=null; canvas.classList.remove('grabbing'); });
+  dragging = false;
+  controls.enabled = true;
+  stage.classList.remove('grabbing');
+});
 
-  // ---------- idle ambient life ----------
-  let nextIdle = performance.now()+3000;
-  function maybeIdle(now){
-    if (now<nextIdle) return;
-    nextIdle = now + 4200 + Math.random()*4200;
-    const ang=Math.random()*Math.PI*2, r=hero.scale*0.35;
-    hero.poke(hero.x+Math.cos(ang)*r, hero.y+Math.sin(ang)*r, 60);
-  }
+// ---------- idle ambient life ----------
+let nextIdle = performance.now()+3500;
+function maybeIdle(now){
+  if (now<nextIdle) return;
+  nextIdle = now + 4500 + Math.random()*4500;
+  const ang=Math.random()*Math.PI*2;
+  pokeAt(Math.cos(ang)*0.5, (Math.random()-0.5)*0.4, Math.sin(ang)*0.4, 1.0);
+}
 
-  // ---------- main loop ----------
-  const energyVal = document.getElementById('energyVal');
-  let last = performance.now();
-  function frame(now){
-    let dt=(now-last)/1000; last=now; dt=Math.min(dt,1/30);
-    const sub=2;
-
-    let shakeForce = 0;
-    if (now < shakeUntil){
-      const t=(now-shakeStart)/1000;
-      const amp = hero.scale*7*Math.max(0,1-(now-shakeStart)/900);
-      shakeForce = Math.sin(t*Math.PI*2*5)*amp;
-    }
-
-    for (let i=0;i<sub;i++) hero.step(dt/sub, pointer, shakeForce/sub);
-    maybeIdle(now);
-
-    ctx.clearRect(0,0,W,H);
-    ctx.save();
-    ctx.globalAlpha=0.16; ctx.fillStyle='#120d08';
-    ctx.beginPath();
-    ctx.ellipse(hero.x, hero.y+hero.scale*1.0, hero.scale*1.0, hero.scale*0.15, 0,0,Math.PI*2);
-    ctx.fill();
-    ctx.restore();
-    hero.draw(ctx);
-
-    energyVal.textContent = Math.round(Math.min(100, hero.energy*140)) + '%';
-
-    requestAnimationFrame(frame);
-  }
-
-  window.addEventListener('resize', resize);
-  resize();
+// ---------- main loop ----------
+const energyVal = document.getElementById('energyVal');
+let last = performance.now();
+function frame(now){
   requestAnimationFrame(frame);
-  setTimeout(()=> setStatus('No wobbles yet.'), 1200);
-})();
+  let dt=(now-last)/1000; last=now; dt=Math.min(dt,1/30);
+
+  let shakeVec = null;
+  if (now < shakeUntil){
+    const t=(now-shakeStart)/1000;
+    const amp = 2.6*Math.max(0,1-(now-shakeStart)/900);
+    shakeVec = new THREE.Vector3(Math.sin(t*Math.PI*2*5)*amp, 0, 0);
+  }
+
+  const drag = dragging ? dragPoint : null;
+  const sub=2;
+  for (let i=0;i<sub;i++) stepPhysics(dt/sub, drag, shakeVec ? shakeVec.clone().multiplyScalar(1/sub) : null);
+  maybeIdle(now);
+
+  controls.update();
+  renderer.render(scene, camera);
+  energyVal.textContent = Math.round(Math.min(100, energySmoothed*110)) + '%';
+}
+
+resize();
+requestAnimationFrame(frame);
+setTimeout(()=> setStatus('No wobbles yet.'), 1200);
 </script>
 </body>
 </html>
