@@ -43,13 +43,31 @@ CDN `<script type="importmap">`, no build step, no bundler.
   same build Three.js's own official `physics_ammo_volume.html` example uses — a `btSoftBody` per
   mesh vertex (1:1, since the geometry is already a single welded indexed mesh), plus a static
   rigid-body ground/plate. Per frame, `physicsWorld.stepSimulation()` runs and the resulting node
-  positions are copied back into the mesh's `BufferGeometry`. Dragging captures a fixed offset from
-  the grab point for every node once, at grab-start, and moves them rigidly together each frame
-  (not re-pulled toward a moving target, which clumps the mesh instead of carrying its shape).
-  Shape retention relies on angular/linear link stiffness (`kAST`/`kLST`) plus a small constant
-  internal pressure (`kPR`) — just enough to keep the shell from caving in under gravity, since
-  this build's soft bodies are surface-only (no internal volume elements) and don't expose
-  pose-matching (`setPose`) in its JS bindings.
+  positions are copied back into the mesh's `BufferGeometry`.
+- **Shape memory is jelly, not a balloon.** It's modeled on an earlier 2D canvas version of this
+  same project, which gets its shape retention entirely from *shape matching*
+  ([Müller et al., "Meshless Deformations Based on Shape Matching"](https://www.beosil.com/download/MeshlessDeformations_SIG05.pdf)) --
+  each frame, find the rotation that best aligns the object's rest pose to its current (deformed)
+  pose, then pull every point back toward "rest shape, rotated by that angle, centered on the
+  current centroid." There is no internal pressure/inflation involved, which matters: pressure's
+  natural equilibrium is a sphere, and an earlier pass that leaned on Bullet's own `kPR` (pressure)
+  for shape retention visibly re-sphered the wedge's flat faces the higher it was pushed -- a
+  balloon, not jelly. This build's `btSoftBody` has no pose-matching exposed in its JS bindings
+  (checked by enumerating `btSoftBody.prototype` at runtime), so it's implemented as an explicit
+  per-frame post-process: a 3x3 cross-covariance/polar-decomposition rotation recovery, applied as a
+  critically-damped spring-toward-goal through velocity (not a direct position snap -- that
+  plateaued at a constant wobble energy forever, since Bullet tracks velocity as its own explicit
+  state and a silent position change left the old velocity fighting the correction every frame).
+  `kPR` is kept at a small fixed value regardless of firmness, just enough to stop the shell caving
+  in on first contact (this build's soft bodies are surface-only, no internal volume elements).
+  Firmness instead drives shape-match strength plus Bullet's own link stiffness (`kAST`/`kLST`).
+- Dragging captures, once at grab-start, every node within range with a distance-based falloff
+  weight and a fixed offset from the grab point, then blends each one toward
+  "grab target + its offset" every frame (not an absolute teleport, and not re-pulled toward a
+  moving target, which clumps the mesh instead of carrying its shape). The soft blend matters for
+  more than fidelity to the reference: an earlier hard position+velocity override could shove the
+  mesh through the ground rigid body faster than one collision pass could catch, leaving it
+  free-falling forever even after release.
 
 ## Running locally
 

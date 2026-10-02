@@ -335,7 +335,125 @@ geo.computeVertexNormals();
 const posAttr = geo.getAttribute('position');
 const restPos = Float32Array.from(posAttr.array); // qx,qy,qz per vertex (local, centered)
 const VN = posAttr.count;
-const vel = new Float32Array(VN*3);
+
+// ---------- shape matching (rotation-only rigid pose recovery) ----------
+// This is jelly, not a balloon: per the 2D reference this project is based
+// on, shape retention comes from "shape matching" (Muller et al., Meshless
+// Deformations Based on Shape Matching) -- each frame, find the rotation
+// that best aligns the object's rest pose to its current (deformed) pose,
+// then pull every point partway toward "rest shape, rotated by that angle,
+// centered on the current centroid." That's what gives a squished object a
+// memory of its own molded form without ever pushing outward the way
+// pressure does (pressure's natural equilibrium is a sphere, which is
+// exactly the "balloon" look this needs to avoid). Ammo's btSoftBody has no
+// pose-matching exposed in this build's JS bindings (checked by enumerating
+// btSoftBody.prototype at runtime -- not there, under any name), so it's
+// implemented here as an explicit per-frame post-process instead.
+let restCx=0, restCy=0, restCz=0;
+for (let i=0;i<VN;i++){ restCx+=restPos[i*3]; restCy+=restPos[i*3+1]; restCz+=restPos[i*3+2]; }
+restCx/=VN; restCy/=VN; restCz/=VN;
+const restQ = new Float32Array(VN*3);
+for (let i=0;i<VN;i++){
+  restQ[i*3]   = restPos[i*3]  -restCx;
+  restQ[i*3+1] = restPos[i*3+1]-restCy;
+  restQ[i*3+2] = restPos[i*3+2]-restCz;
+}
+
+function mat3Transpose(m){ return [m[0],m[3],m[6], m[1],m[4],m[7], m[2],m[5],m[8]]; }
+function mat3Inverse(m){
+  const [a,b,c,d,e,f,g,h,i] = m;
+  const A=e*i-f*h, B=-(d*i-f*g), C=d*h-e*g;
+  const D=-(b*i-c*h), E=a*i-c*g, F=-(a*h-b*g);
+  const G=b*f-c*e, H=-(a*f-c*d), I=a*e-b*d;
+  const det = a*A + b*B + c*C;
+  if (Math.abs(det) < 1e-9) return null;
+  const invDet = 1/det;
+  return [A*invDet,D*invDet,G*invDet, B*invDet,E*invDet,H*invDet, C*invDet,F*invDet,I*invDet];
+}
+function gramSchmidt3(m){
+  let c0=[m[0],m[3],m[6]], c1=[m[1],m[4],m[7]], c2=[m[2],m[5],m[8]];
+  const norm=v=>Math.hypot(v[0],v[1],v[2])||1e-9;
+  const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+  const sub=(a,b,s)=>[a[0]-b[0]*s,a[1]-b[1]*s,a[2]-b[2]*s];
+  const scale=(a,s)=>[a[0]*s,a[1]*s,a[2]*s];
+  const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+  c0 = scale(c0, 1/norm(c0));
+  c1 = sub(c1, c0, dot(c1,c0)); c1 = scale(c1, 1/norm(c1));
+  c2 = sub(c2, c0, dot(c2,c0)); c2 = sub(c2, c1, dot(c2,c1)); c2 = scale(c2, 1/norm(c2));
+  if (dot(c0, cross(c1,c2)) < 0) c2 = scale(c2, -1);
+  return [c0[0],c1[0],c2[0], c0[1],c1[1],c2[1], c0[2],c1[2],c2[2]];
+}
+// Iterative polar decomposition (Newton's method on the orthogonal factor).
+// Validated standalone against known rotations (random point cloud, 5 axes/
+// angles incl. a near-pi and a near-zero case) before wiring in here --
+// converges to <1e-4 error by 16 iterations for a moderately-conditioned
+// matrix, so 24 leaves real margin.
+function polarRotation(Apq){
+  let R = Apq;
+  for (let n=0;n<24;n++){
+    const Rinv = mat3Inverse(R);
+    if (!Rinv) break;
+    const RinvT = mat3Transpose(Rinv);
+    R = R.map((v,i)=>0.5*(v+RinvT[i]));
+  }
+  return gramSchmidt3(R);
+}
+function mat3MulVec(m, x,y,z){
+  return [m[0]*x+m[1]*y+m[2]*z, m[3]*x+m[4]*y+m[5]*z, m[6]*x+m[7]*y+m[8]*z];
+}
+// Scratch goal-position buffer, reused every frame to avoid per-frame GC churn.
+const shapeGoal = new Float32Array(VN*3);
+function shapeMatch(nodes, stiffness, dt){
+  // Reads current positions straight from the Ammo nodes (the authoritative
+  // state right after stepSimulation) rather than the Three.js posAttr
+  // buffer, which at this point in the frame is still last frame's data.
+  let cx=0,cy=0,cz=0;
+  for (let i=0;i<VN;i++){ const p=nodes.at(i).get_m_x(); cx+=p.x(); cy+=p.y(); cz+=p.z(); }
+  cx/=VN; cy/=VN; cz/=VN;
+  let Apq = [0,0,0, 0,0,0, 0,0,0];
+  for (let i=0;i<VN;i++){
+    const p = nodes.at(i).get_m_x();
+    const px=p.x()-cx, py=p.y()-cy, pz=p.z()-cz;
+    const qx=restQ[i*3], qy=restQ[i*3+1], qz=restQ[i*3+2];
+    Apq[0]+=px*qx; Apq[1]+=px*qy; Apq[2]+=px*qz;
+    Apq[3]+=py*qx; Apq[4]+=py*qy; Apq[5]+=py*qz;
+    Apq[6]+=pz*qx; Apq[7]+=pz*qy; Apq[8]+=pz*qz;
+  }
+  const Rm = polarRotation(Apq);
+  for (let i=0;i<VN;i++){
+    const g = mat3MulVec(Rm, restQ[i*3], restQ[i*3+1], restQ[i*3+2]);
+    shapeGoal[i*3]=cx+g[0]; shapeGoal[i*3+1]=cy+g[1]; shapeGoal[i*3+2]=cz+g[2];
+  }
+  // Applied as a VELOCITY nudge (a spring pulling toward the goal), not a
+  // direct position snap -- tried position-snapping first and it plateaued
+  // at ~70% wobble energy forever instead of settling: Bullet tracks
+  // velocity as its own explicit state (unlike the 2D reference's Verlet
+  // integration, where "change position" and "that implies a velocity" are
+  // the same thing), so silently moving position without touching velocity
+  // left the old velocity fighting the correction every single frame,
+  // forever. Going through velocity lets it integrate through Bullet's own
+  // step + existing kDP damping normally, like any other force.
+  //
+  // A pure spring (no damping term of its own) still settled, just slowly --
+  // ~30s to reach the same resting energy kDP alone used to reach in ~7s --
+  // because it has nothing opposing its own ringing except the general kDP
+  // damping, which isn't scaled to this specific force. Added here as a
+  // proper spring-damper (PD controller). `2*sqrt(stiffness)` is the
+  // textbook critical-damping coefficient only for unit mass -- actual
+  // per-node mass here is ~1.1/VN (a few ten-thousandths), so this is
+  // nowhere near literally critical, just empirically tuned starting from
+  // that formula's shape; it's what got the 30s settle down to ~15-20s.
+  const damping = 2*Math.sqrt(stiffness);
+  for (let i=0;i<VN;i++){
+    const node = nodes.at(i);
+    const p = node.get_m_x();
+    const v = node.get_m_v();
+    const ax = (shapeGoal[i*3]  -p.x())*stiffness - v.x()*damping;
+    const ay = (shapeGoal[i*3+1]-p.y())*stiffness - v.y()*damping;
+    const az = (shapeGoal[i*3+2]-p.z())*stiffness - v.z()*damping;
+    v.setValue(v.x()+ax*dt, v.y()+ay*dt, v.z()+az*dt);
+  }
+}
 
 // Find the nearest point on the wedge's own 2D cross-section outline for
 // any (x,y) -- this is what decides rind vs. flesh, regardless of depth,
@@ -534,32 +652,49 @@ function applyMaterialTuning(){
   if (!softBody) return;
   const sbConfig = softBody.get_m_cfg();
   sbConfig.set_kDP(0.02 + state.damping*0.4);     // damping
-  // Dropping kPR to 0 made the shell fully cave in under gravity (this
-  // build's CreateFromTriMesh only generates surface links, no internal
-  // volume elements, and has no setPose()/pose-matching binding to fall
-  // back on) -- it needs a small constant outward push to resist that.
-  // But pressure's natural equilibrium is a sphere (minimal surface for a
-  // given volume), and the 90-510 range from the first attempt was strong
-  // enough to visibly re-sphere the wedge's flat faces/sharp rind edge.
-  // Kept low here and backed mostly by angular stiffness (kAST, below)
-  // instead, which resists the flat panels folding/bending without pushing
-  // the whole shape toward round.
-  sbConfig.set_kPR(8 + state.firmness*14);
+  // Fixed, low, NOT tied to firmness: this build's CreateFromTriMesh only
+  // generates surface links (no internal volume elements) and has no
+  // setPose()/pose-matching binding, so without some outward push the shell
+  // caves in under gravity before anything resists (confirmed: kPR=0 alone
+  // collapsed it inside-out). But pressure's natural equilibrium is a
+  // sphere, and scaling it up with "firmness" (the first two tuning passes)
+  // is exactly what kept re-sphering the wedge -- a balloon, not jelly. Real
+  // shape memory is shapeMatch() below; this is just enough residual
+  // pressure to survive first contact with the plate.
+  sbConfig.set_kPR(14);
   const mat = softBody.get_m_materials().at(0);
   mat.set_m_kLST(0.3 + state.firmness*0.65);       // linear stiffness
   mat.set_m_kAST(0.6 + state.firmness*0.35);       // angular stiffness -- resists folding at edges
 }
+
+// Firmness also drives how hard shapeMatch() pulls the mesh back toward its
+// own rest silhouette each frame -- the main defense against it settling
+// into a rounder, vaguer blob instead of holding the wedge's flat
+// faces/sharp rind edge.
+function shapeMatchStiffness(){ return 40 + state.firmness*220; }
 
 function stepPhysics(dt, isDragging, shakeVec){
   if (state.paused || !physicsWorld) return;
 
   if (isDragging && grabbedNodes){
     const nodes = softBody.get_m_nodes();
+    // A soft per-frame blend toward the grab target, not an absolute
+    // teleport+zeroed-velocity: the reference's own grab works the same
+    // way (`p.x += (target - p.x) * w * 0.4` every substep), and it matters
+    // here for more than fidelity -- a hard position+velocity override is
+    // exactly what let a fast drag tunnel the mesh through the ground rigid
+    // body earlier this session (teleporting past the floor in one step
+    // left no continuous motion for the collision pass to catch). Blending
+    // instead lets Bullet's own integration stay continuous, so collision
+    // keeps up.
+    const factor = 1 - Math.exp(-60*dt);
     for (const g of grabbedNodes){
       const node = nodes.at(g.i);
-      const ny = Math.max(dragPoint.y+g.oy, FLOOR_Y); // can't drag it through the plate
-      node.get_m_x().setValue(dragPoint.x+g.ox, ny, dragPoint.z+g.oz);
-      node.get_m_v().setValue(0,0,0);
+      const p = node.get_m_x();
+      const tx = dragPoint.x+g.ox, tz = dragPoint.z+g.oz;
+      const ty = Math.max(dragPoint.y+g.oy, FLOOR_Y); // can't drag it through the plate
+      const k = g.w*factor;
+      p.setValue(p.x()+(tx-p.x())*k, p.y()+(ty-p.y())*k, p.z()+(tz-p.z())*k);
     }
   }
 
@@ -570,6 +705,10 @@ function stepPhysics(dt, isDragging, shakeVec){
       v.setValue(v.x()+shakeVec.x, v.y()+shakeVec.y, v.z()+shakeVec.z);
     }
   }
+
+  // A velocity-based force, so it belongs alongside gravity/grab/shake
+  // before the step, not patched on after.
+  shapeMatch(softBody.get_m_nodes(), shapeMatchStiffness(), dt);
 
   physicsWorld.stepSimulation(dt, 6);
 
@@ -761,7 +900,15 @@ renderer.domElement.addEventListener('pointerdown', (e)=>{
     for (let i=0;i<VN;i++){
       const dx=posArr[i*3]-hit.point.x, dy=posArr[i*3+1]-hit.point.y, dz=posArr[i*3+2]-hit.point.z;
       const d = Math.hypot(dx,dy,dz);
-      if (d<GRAB_RADIUS) grabbedNodes.push({ i, ox:dx, oy:dy, oz:dz });
+      if (d<GRAB_RADIUS){
+        const w = (1-d/GRAB_RADIUS)**2; // falls off with distance from the
+                                         // grab point, so the far end of the
+                                         // melon lags/sags behind your hand
+                                         // instead of moving in lockstep --
+                                         // still "carry the whole thing,"
+                                         // just not perfectly rigidly.
+        grabbedNodes.push({ i, w, ox:dx, oy:dy, oz:dz });
+      }
     }
   }
 });
