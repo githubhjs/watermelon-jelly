@@ -220,7 +220,7 @@ stage.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 50);
-camera.position.set(3.0, 1.1, 8.6);
+camera.position.set(2.6, 0.75, 9.6);
 
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
@@ -311,6 +311,16 @@ let centerX = 0, centerY = 0;
   geo.translate(-centerX, -centerY, 0);
 }
 geo.scale(SCALE3D, SCALE3D, SCALE3D);
+// ExtrudeGeometry gives the side walls and the two caps different UVs at the
+// seam where they meet, even for vertices at the exact same position --
+// mergeVertices compares ALL attributes, so without this those seam
+// vertices never actually weld. That's what showed up as visible dark
+// cracks opening up along the seam whenever the mesh was stretched: they
+// were never really one continuous surface, just two unwelded edges lying
+// on top of each other until the drag pulled them apart. We don't use UVs
+// (vertex-colored, no texture) so it's safe to just drop the attribute.
+geo.deleteAttribute('uv');
+geo.deleteAttribute('normal');
 geo = mergeVertices(geo, 1e-4);
 geo.computeVertexNormals();
 // Round the low-poly extrusion into a genuinely plump/smooth shape (not just
@@ -384,19 +394,50 @@ const material = new THREE.MeshPhysicalMaterial({
 const jelly = new THREE.Mesh(geo, material);
 jelly.castShadow = true;
 jelly.receiveShadow = false;
-scene.add(jelly);
+
+// Rest the wedge tipped over onto one of its flat taper faces, like a real
+// slice set down on a plate -- balanced perfectly upright on the pointed
+// tip (the original default) isn't a stable resting pose for anything,
+// let alone a soft jelly. The physics itself still runs in the mesh's own
+// local space (unchanged); this is purely a scene-graph rotation, so the
+// object tips over visually without touching any of the simulation math.
+const REST_TILT_Z = -1.14; // radians; tuned by eye against the reference
+const rig = new THREE.Group();
+rig.add(jelly);
+rig.rotation.z = REST_TILT_Z;
+scene.add(rig);
+
+// Drop the plate to sit just under the tilted object's actual lowest point
+// (computed from the real rest geometry, not guessed) instead of the old
+// fixed offset that assumed the object was still standing upright.
+{
+  const cs = Math.cos(REST_TILT_Z), sn = Math.sin(REST_TILT_Z);
+  let minY = Infinity;
+  for (let i=0;i<VN;i++){
+    const x=restPos[i*3], y=restPos[i*3+1];
+    const ry = x*sn + y*cs;
+    if (ry<minY) minY = ry;
+  }
+  plate.position.y = minY - 0.05;
+}
 
 // seeds: small dark ellipsoids glued to a handful of flesh-region vertices,
-// following their vertex's live (deformed) position each frame.
+// following their vertex's live (deformed) position each frame. After the
+// subdivision pass the flat end-caps are no longer just their original
+// boundary vertices -- subdivision ran on those cap triangles too, so there
+// are now genuine interior-ish points to scatter seeds across (not just a
+// line along the rim). Bias toward the +Z cap, which is roughly what the
+// default camera faces, and require real distance from the rind so seeds
+// don't end up sitting on the green/white band.
 const seedIdx = [];
 (function pickSeeds(){
   const candidates = [];
   for (let i=0;i<VN;i++){
-    const x=restPos[i*3], y=restPos[i*3+1];
+    const x=restPos[i*3], y=restPos[i*3+1], z=restPos[i*3+2];
     const { dist, isArc } = nearestOutline(x,y);
-    if (!isArc) candidates.push(i);
+    if (!isArc && dist>0.22 && z>0.15) candidates.push(i);
   }
-  for (let k=0;k<16 && candidates.length;k++){
+  for (let k=0;k<18 && candidates.length;k++){
     const j = Math.floor(Math.random()*candidates.length);
     seedIdx.push(candidates.splice(j,1)[0]);
   }
@@ -406,7 +447,7 @@ const seedMat = new THREE.MeshStandardMaterial({ color:0x241309, roughness:0.4 }
 const seedMeshes = seedIdx.map(()=>{
   const m = new THREE.Mesh(seedGeo, seedMat);
   m.castShadow = true;
-  scene.add(m);
+  rig.add(m);
   return m;
 });
 
@@ -440,7 +481,14 @@ function stepPhysics(dt, dragInfo, shakeVec){
   if (state.paused) return;
   const pos = posAttr.array;
   const STRUCT = 0.22 + state.firmness*0.55;
-  const HOME = 0.16 + state.firmness*0.3;
+  // The home-position pull is a direct position-space correction (not a
+  // force), so at full strength it snaps vertices back faster than the
+  // velocity-based drag pull below can ever move them -- holding and
+  // squishing the jelly would do almost nothing visible. Real jelly held
+  // in your hand conforms to your grip and only springs back once you let
+  // go, so weaken this pull a lot while actively dragging and restore it
+  // on release.
+  const HOME = (0.16 + state.firmness*0.3) * (dragInfo ? 0.08 : 1);
   const DAMP = 1 - (0.01 + state.damping*0.065);
 
   const MAXV = 9;
@@ -618,8 +666,18 @@ renderer.domElement.addEventListener('pointerdown', (e)=>{
     controls.enabled = false;
     controls.autoRotate = false;
     stage.classList.add('grabbing');
+    // The drag plane lives in world space (it's defined from the camera's
+    // world-space view direction), but the physics sim runs entirely in the
+    // jelly's own LOCAL space (restPos/posAttr are local coordinates, and
+    // the jelly now sits inside a rotated `rig` group). Every point coming
+    // out of raycasting is world-space and must be converted with
+    // jelly.worldToLocal() before it's used as a drag/poke target --
+    // skipping this was why dragging barely did anything once the tilt
+    // rotation was added: the "pull toward the pointer" force was being
+    // compared against vertex positions in a completely different,
+    // rotated frame.
     dragPlane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()).negate(), hit.point);
-    dragPoint.copy(hit.point);
+    dragPoint.copy(jelly.worldToLocal(hit.point.clone()));
   }
 });
 window.addEventListener('pointermove', (e)=>{
@@ -629,7 +687,7 @@ window.addEventListener('pointermove', (e)=>{
   raycaster.setFromCamera(ndc, camera);
   const p = new THREE.Vector3();
   raycaster.ray.intersectPlane(dragPlane, p);
-  if (p) dragPoint.copy(p);
+  if (p) dragPoint.copy(jelly.worldToLocal(p));
 });
 window.addEventListener('pointerup', (e)=>{
   if (dragging && !moved){
@@ -637,7 +695,8 @@ window.addEventListener('pointerup', (e)=>{
     raycaster.setFromCamera(ndc, camera);
     const hit = raycaster.intersectObject(jelly,false)[0];
     if (hit){
-      pokeAt(hit.point.x,hit.point.y,hit.point.z, 3.4);
+      const lp = jelly.worldToLocal(hit.point.clone());
+      pokeAt(lp.x,lp.y,lp.z, 3.4);
       pokeCount++;
       sfx.poke();
       setStatus(pokeCount===1 ? 'Nice! Try dragging it too.' : 'Jiggling…', 1200);
