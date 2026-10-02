@@ -192,6 +192,7 @@
 
 <p class="hint">Drag the jelly to squish it · drag empty space to orbit · tap to poke</p>
 
+<script src="https://cdn.jsdelivr.net/gh/kripken/ammo.js@79190a1f03845794b1bba1777f30037349967658/builds/ammo.wasm.js"></script>
 <script type="importmap">
 {
   "imports": {
@@ -394,32 +395,8 @@ const material = new THREE.MeshPhysicalMaterial({
 const jelly = new THREE.Mesh(geo, material);
 jelly.castShadow = true;
 jelly.receiveShadow = false;
-
-// Rest the wedge tipped over onto one of its flat taper faces, like a real
-// slice set down on a plate -- balanced perfectly upright on the pointed
-// tip (the original default) isn't a stable resting pose for anything,
-// let alone a soft jelly. The physics itself still runs in the mesh's own
-// local space (unchanged); this is purely a scene-graph rotation, so the
-// object tips over visually without touching any of the simulation math.
-const REST_TILT_Z = -1.14; // radians; tuned by eye against the reference
-const rig = new THREE.Group();
-rig.add(jelly);
-rig.rotation.z = REST_TILT_Z;
-scene.add(rig);
-
-// Drop the plate to sit just under the tilted object's actual lowest point
-// (computed from the real rest geometry, not guessed) instead of the old
-// fixed offset that assumed the object was still standing upright.
-{
-  const cs = Math.cos(REST_TILT_Z), sn = Math.sin(REST_TILT_Z);
-  let minY = Infinity;
-  for (let i=0;i<VN;i++){
-    const x=restPos[i*3], y=restPos[i*3+1];
-    const ry = x*sn + y*cs;
-    if (ry<minY) minY = ry;
-  }
-  plate.position.y = minY - 0.05;
-}
+jelly.frustumCulled = false;
+scene.add(jelly);
 
 // seeds: small dark ellipsoids glued to a handful of flesh-region vertices,
 // following their vertex's live (deformed) position each frame. After the
@@ -447,28 +424,9 @@ const seedMat = new THREE.MeshStandardMaterial({ color:0x241309, roughness:0.4 }
 const seedMeshes = seedIdx.map(()=>{
   const m = new THREE.Mesh(seedGeo, seedMat);
   m.castShadow = true;
-  rig.add(m);
+  scene.add(m);
   return m;
 });
-
-// ---------- soft-body physics: structural edge constraints + a spring
-// back toward each vertex's absolute rest position (no rotation-matching
-// needed -- the camera orbits the object, the object itself doesn't need
-// to tumble). ----------
-const edgeSet = new Set();
-const edges = []; // [a,b,restLen]
-const index = geo.getIndex();
-function addEdge(a,b){
-  const key = a<b ? a*VN+b : b*VN+a;
-  if (edgeSet.has(key)) return;
-  edgeSet.add(key);
-  const dx=restPos[a*3]-restPos[b*3], dy=restPos[a*3+1]-restPos[b*3+1], dz=restPos[a*3+2]-restPos[b*3+2];
-  edges.push([a,b,Math.hypot(dx,dy,dz)]);
-}
-for (let i=0;i<index.count;i+=3){
-  const a=index.getX(i), b=index.getX(i+1), c=index.getX(i+2);
-  addEdge(a,b); addEdge(b,c); addEdge(c,a);
-}
 
 const state = {
   firmness: 0.52,
@@ -477,96 +435,191 @@ const state = {
   hueShift: 0,
 };
 
-function stepPhysics(dt, dragInfo, shakeVec){
-  if (state.paused) return;
-  const pos = posAttr.array;
-  const STRUCT = 0.22 + state.firmness*0.55;
-  // The home-position pull is a direct position-space correction (not a
-  // force), so at full strength it snaps vertices back faster than the
-  // velocity-based drag pull below can ever move them -- holding and
-  // squishing the jelly would do almost nothing visible. Real jelly held
-  // in your hand conforms to your grip and only springs back once you let
-  // go, so weaken this pull a lot while actively dragging and restore it
-  // on release.
-  const HOME = (0.16 + state.firmness*0.3) * (dragInfo ? 0.08 : 1);
-  const DAMP = 1 - (0.01 + state.damping*0.065);
+// ======================================================================
+// Real physics (Ammo.js / Bullet btSoftBody), not a hand-rolled spring
+// system. A volumetric soft body gets real gravity, real collision with
+// the plate, and real pressure-based shape/volume preservation for free --
+// the things that kept needing bespoke, fragile patches (floor clipping,
+// coordinate-frame bugs between world/local space, a grab that fought the
+// home-spring) in the previous version.
+// ======================================================================
+const GROUND_Y = -1.6;
+plate.position.y = GROUND_Y;
 
-  const MAXV = 9;
-  for (let i=0;i<VN;i++){
-    let vx=vel[i*3]*DAMP, vy=vel[i*3+1]*DAMP, vz=vel[i*3+2]*DAMP;
-    if (shakeVec){ vx+=shakeVec.x*dt; vy+=shakeVec.y*dt; vz+=shakeVec.z*dt; }
-    const sp = Math.hypot(vx,vy,vz);
-    if (sp>MAXV){ const s=MAXV/sp; vx*=s; vy*=s; vz*=s; }
-    vel[i*3]=vx; vel[i*3+1]=vy; vel[i*3+2]=vz;
-    pos[i*3]  += vx*dt;
-    pos[i*3+1]+= vy*dt;
-    pos[i*3+2]+= vz*dt;
+let AmmoLib, physicsWorld, softBody, groundBody;
+const ammoTmpTransform = () => new AmmoLib.btTransform();
+
+function startPhysics(){
+  const collisionConfiguration = new AmmoLib.btSoftBodyRigidBodyCollisionConfiguration();
+  const dispatcher = new AmmoLib.btCollisionDispatcher(collisionConfiguration);
+  const broadphase = new AmmoLib.btDbvtBroadphase();
+  const solver = new AmmoLib.btSequentialImpulseConstraintSolver();
+  const softBodySolver = new AmmoLib.btDefaultSoftBodySolver();
+  physicsWorld = new AmmoLib.btSoftRigidDynamicsWorld(dispatcher, broadphase, solver, collisionConfiguration, softBodySolver);
+  physicsWorld.setGravity(new AmmoLib.btVector3(0, -9.8, 0));
+  physicsWorld.getWorldInfo().set_m_gravity(new AmmoLib.btVector3(0, -9.8, 0));
+
+  // Static ground (a flat box standing in for the plate) so the jelly has
+  // something real to land and rest on -- no manual floor-clamp math.
+  const groundShape = new AmmoLib.btBoxShape(new AmmoLib.btVector3(3, 0.5, 3));
+  const groundTransform = new AmmoLib.btTransform();
+  groundTransform.setIdentity();
+  groundTransform.setOrigin(new AmmoLib.btVector3(0, GROUND_Y-0.5, 0));
+  const groundMotionState = new AmmoLib.btDefaultMotionState(groundTransform);
+  const groundInfo = new AmmoLib.btRigidBodyConstructionInfo(0, groundMotionState, groundShape, new AmmoLib.btVector3(0,0,0));
+  groundBody = new AmmoLib.btRigidBody(groundInfo);
+  groundBody.setFriction(0.9);
+  physicsWorld.addRigidBody(groundBody);
+
+  createSoftBody();
+}
+
+// The geometry is already a single, properly welded indexed mesh (see the
+// uv/normal-deletion note above), so -- unlike Three.js's own stock
+// btSoftBody example, which has to de-duplicate box/sphere geometries
+// first -- every render vertex maps 1:1 onto one Ammo node. No separate
+// "index association" bookkeeping needed.
+function createSoftBody(){
+  if (softBody){
+    physicsWorld.removeSoftBody(softBody);
+    AmmoLib.destroy(softBody);
   }
 
-  if (dragInfo){
-    const R = 0.7;
+  // Start it tipped only slightly off its point, well above the plate, and
+  // let real gravity + collision topple and settle it -- this is the
+  // actual answer to "wouldn't it fall over standing on the tip": it does,
+  // on its own, because nothing is holding it upright.
+  const dropAngle = 0.35, dropHeight = 0.5;
+  const ca = Math.cos(dropAngle), sa = Math.sin(dropAngle);
+  const startVerts = new Float32Array(restPos.length);
+  for (let i=0;i<VN;i++){
+    const x=restPos[i*3], y=restPos[i*3+1], z=restPos[i*3+2];
+    startVerts[i*3]   = x*ca - y*sa;
+    startVerts[i*3+1] = x*sa + y*ca + dropHeight;
+    startVerts[i*3+2] = z;
+  }
+
+  const helpers = new AmmoLib.btSoftBodyHelpers();
+  const ammoIndices = geo.getIndex().array;
+  softBody = helpers.CreateFromTriMesh(
+    physicsWorld.getWorldInfo(),
+    startVerts,
+    ammoIndices,
+    ammoIndices.length/3,
+    true
+  );
+
+  const sbConfig = softBody.get_m_cfg();
+  sbConfig.set_viterations(40);
+  sbConfig.set_piterations(40);
+  sbConfig.set_collisions(0x11); // soft-rigid + soft-soft
+  sbConfig.set_kDF(0.4);         // friction
+  applyMaterialTuning();
+
+  softBody.setTotalMass(1.1, false);
+  AmmoLib.castObject(softBody, AmmoLib.btCollisionObject).getCollisionShape().setMargin(0.03);
+  physicsWorld.addSoftBody(softBody, 1, -1);
+  softBody.setActivationState(4); // DISABLE_DEACTIVATION
+  jelly.userData.physicsBody = softBody;
+}
+
+function applyMaterialTuning(){
+  if (!softBody) return;
+  const sbConfig = softBody.get_m_cfg();
+  sbConfig.set_kDP(0.02 + state.damping*0.4);     // damping
+  // Dropping kPR to 0 made the shell fully cave in under gravity (this
+  // build's CreateFromTriMesh only generates surface links, no internal
+  // volume elements, and has no setPose()/pose-matching binding to fall
+  // back on) -- it needs a small constant outward push to resist that.
+  // But pressure's natural equilibrium is a sphere (minimal surface for a
+  // given volume), and the 90-510 range from the first attempt was strong
+  // enough to visibly re-sphere the wedge's flat faces/sharp rind edge.
+  // Kept low here and backed mostly by angular stiffness (kAST, below)
+  // instead, which resists the flat panels folding/bending without pushing
+  // the whole shape toward round.
+  sbConfig.set_kPR(8 + state.firmness*14);
+  const mat = softBody.get_m_materials().at(0);
+  mat.set_m_kLST(0.3 + state.firmness*0.65);       // linear stiffness
+  mat.set_m_kAST(0.6 + state.firmness*0.35);       // angular stiffness -- resists folding at edges
+}
+
+function stepPhysics(dt, isDragging, shakeVec){
+  if (state.paused || !physicsWorld) return;
+
+  if (isDragging && grabbedNodes){
+    const nodes = softBody.get_m_nodes();
+    for (const g of grabbedNodes){
+      const node = nodes.at(g.i);
+      node.get_m_x().setValue(dragPoint.x+g.ox, dragPoint.y+g.oy, dragPoint.z+g.oz);
+      node.get_m_v().setValue(0,0,0);
+    }
+  }
+
+  if (shakeVec){
+    const nodes = softBody.get_m_nodes();
     for (let i=0;i<VN;i++){
-      const dx=dragInfo.x-pos[i*3], dy=dragInfo.y-pos[i*3+1], dz=dragInfo.z-pos[i*3+2];
-      const d = Math.hypot(dx,dy,dz);
-      if (d<R){
-        const w=(1-d/R);
-        vel[i*3]   += dx*w*0.9*dt*60;
-        vel[i*3+1] += dy*w*0.9*dt*60;
-        vel[i*3+2] += dz*w*0.9*dt*60;
-      }
+      const v = nodes.at(i).get_m_v();
+      v.setValue(v.x()+shakeVec.x, v.y()+shakeVec.y, v.z()+shakeVec.z);
     }
   }
 
-  for (let pass=0; pass<4; pass++){
-    for (const [a,b,rest] of edges){
-      let dx=pos[b*3]-pos[a*3], dy=pos[b*3+1]-pos[a*3+1], dz=pos[b*3+2]-pos[a*3+2];
-      const d = Math.hypot(dx,dy,dz)||1e-6;
-      const f = ((d-rest)/d)*0.5*STRUCT;
-      pos[a*3]  += dx*f; pos[a*3+1]  += dy*f; pos[a*3+2]  += dz*f;
-      pos[b*3]  -= dx*f; pos[b*3+1]  -= dy*f; pos[b*3+2]  -= dz*f;
-    }
-  }
+  physicsWorld.stepSimulation(dt, 6);
 
-  // gentle pull back toward each vertex's own absolute rest position
+  const posArr = posAttr.array;
+  const nodes = softBody.get_m_nodes();
+  let energyAccum = 0;
   for (let i=0;i<VN;i++){
-    pos[i*3]   += (restPos[i*3]  -pos[i*3])  *HOME;
-    pos[i*3+1] += (restPos[i*3+1]-pos[i*3+1])*HOME;
-    pos[i*3+2] += (restPos[i*3+2]-pos[i*3+2])*HOME;
+    const node = nodes.at(i);
+    const p = node.get_m_x();
+    posArr[i*3]=p.x(); posArr[i*3+1]=p.y(); posArr[i*3+2]=p.z();
+    const v = node.get_m_v();
+    energyAccum += v.x()*v.x()+v.y()*v.y()+v.z()*v.z();
   }
-
   posAttr.needsUpdate = true;
   geo.computeVertexNormals();
+  geo.computeBoundingSphere(); // the mesh actually moves now (gravity) -- a
+                                // stale bounding sphere would make raycasts
+                                // (grab/poke) silently miss it once it falls
+                                // outside where it started.
+  energySmoothed = energySmoothed*0.9 + Math.sqrt(energyAccum/VN)*0.1;
 
   for (let k=0;k<seedIdx.length;k++){
     const i = seedIdx[k];
-    seedMeshes[k].position.set(pos[i*3]*1.02, pos[i*3+1]*1.02, pos[i*3+2]*1.02);
+    seedMeshes[k].position.set(posArr[i*3], posArr[i*3+1], posArr[i*3+2]);
   }
-
-  let e=0;
-  for (let i=0;i<VN;i++) e += vel[i*3]**2+vel[i*3+1]**2+vel[i*3+2]**2;
-  energySmoothed = energySmoothed*0.9 + (Math.sqrt(e/VN))*0.1;
 }
 let energySmoothed = 0;
 
+function liveCentroid(){
+  // Nudge/idle pokes used to aim at a fixed point near the object's local
+  // origin -- fine when the object never moved, but now it actually falls
+  // and can be carried anywhere, so "poke near the middle" has to mean
+  // "near wherever it currently is," not a hardcoded world-space spot.
+  if (!softBody) return {x:0,y:0,z:0};
+  const nodes = softBody.get_m_nodes();
+  let cx=0,cy=0,cz=0;
+  for (let i=0;i<VN;i++){ const p=nodes.at(i).get_m_x(); cx+=p.x(); cy+=p.y(); cz+=p.z(); }
+  return { x:cx/VN, y:cy/VN, z:cz/VN };
+}
+
 function pokeAt(x,y,z,strength){
-  const pos = posAttr.array;
-  const R = 0.95;
+  if (!softBody) return;
+  const R = 1.0;
+  const nodes = softBody.get_m_nodes();
   for (let i=0;i<VN;i++){
-    const dx=pos[i*3]-x, dy=pos[i*3+1]-y, dz=pos[i*3+2]-z;
+    const node = nodes.at(i);
+    const p = node.get_m_x();
+    const dx=p.x()-x, dy=p.y()-y, dz=p.z()-z;
     const d = Math.hypot(dx,dy,dz)||1e-4;
     if (d<R){
       const w=(1-d/R);
-      vel[i*3]  += (dx/d)*w*strength;
-      vel[i*3+1]+= (dy/d)*w*strength;
-      vel[i*3+2]+= (dz/d)*w*strength;
+      const v = node.get_m_v();
+      v.setValue(v.x()+(dx/d)*w*strength, v.y()+(dy/d)*w*strength, v.z()+(dz/d)*w*strength);
     }
   }
 }
 function resetJelly(){
-  posAttr.array.set(restPos);
-  vel.fill(0);
-  posAttr.needsUpdate = true;
-  geo.computeVertexNormals();
+  createSoftBody();
 }
 
 // ---------- sound ----------
@@ -600,10 +653,12 @@ function setStatus(text, hold){
 document.getElementById('firmness').addEventListener('input', e=>{
   state.firmness = e.target.value/100;
   document.getElementById('firmnessVal').textContent = e.target.value;
+  applyMaterialTuning();
 });
 document.getElementById('damping').addEventListener('input', e=>{
   state.damping = e.target.value/100;
   document.getElementById('dampVal').textContent = e.target.value;
+  applyMaterialTuning();
 });
 document.querySelectorAll('.swatch').forEach(btn=>{
   btn.addEventListener('click', ()=>{
@@ -613,7 +668,8 @@ document.querySelectorAll('.swatch').forEach(btn=>{
   });
 });
 document.getElementById('nudgeBtn').addEventListener('click', ()=>{
-  pokeAt(0,0,0.6, 5.2);
+  const c = liveCentroid();
+  pokeAt(c.x, c.y, c.z+0.6, 5.2);
   sfx.nudge();
   setStatus('Nudged. Watch it wobble.', 1600);
 });
@@ -642,11 +698,20 @@ soundBtn.addEventListener('click', ()=>{
 });
 
 // ---------- pointer: raycast to tell a jelly-drag from a camera-orbit ----------
+// Everything here is plain world space now -- Ammo's soft-body nodes live in
+// world space and the jelly mesh has no parent transform of its own (its
+// geometry's own position attribute IS the world position each frame), so
+// none of the old local/world conversions are needed any more.
 const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
 const dragPlane = new THREE.Plane();
 const dragPoint = new THREE.Vector3();
+// Large enough to cover the whole body (bbox diagonal is ~5.4) -- the user
+// wants to pick the whole melon up and carry it, not just locally squish
+// a handful of nearby nodes while the rest stays stuck to the plate.
+const GRAB_RADIUS = 8;
 let dragging = false;
+let grabbedNodes = null; // [{i, w, ox, oy, oz}], captured once at grab-start
 let pokeCount = 0;
 
 function toNDC(x,y){
@@ -658,6 +723,7 @@ function toNDC(x,y){
 let downX=0, downY=0, moved=false;
 renderer.domElement.addEventListener('pointerdown', (e)=>{
   downX=e.clientX; downY=e.clientY; moved=false;
+  if (!softBody) return;
   toNDC(e.clientX,e.clientY);
   raycaster.setFromCamera(ndc, camera);
   const hit = raycaster.intersectObject(jelly, false)[0];
@@ -666,18 +732,20 @@ renderer.domElement.addEventListener('pointerdown', (e)=>{
     controls.enabled = false;
     controls.autoRotate = false;
     stage.classList.add('grabbing');
-    // The drag plane lives in world space (it's defined from the camera's
-    // world-space view direction), but the physics sim runs entirely in the
-    // jelly's own LOCAL space (restPos/posAttr are local coordinates, and
-    // the jelly now sits inside a rotated `rig` group). Every point coming
-    // out of raycasting is world-space and must be converted with
-    // jelly.worldToLocal() before it's used as a drag/poke target --
-    // skipping this was why dragging barely did anything once the tilt
-    // rotation was added: the "pull toward the pointer" force was being
-    // compared against vertex positions in a completely different,
-    // rotated frame.
     dragPlane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()).negate(), hit.point);
-    dragPoint.copy(jelly.worldToLocal(hit.point.clone()));
+    dragPoint.copy(hit.point);
+
+    // Capture which nodes are "in your grip" and their fixed offset from
+    // the grab point, once, at grab-start -- not re-pulled toward a moving
+    // target every frame (that clumps points together instead of carrying
+    // their shape along, which is what the first hand-rolled version did).
+    grabbedNodes = [];
+    const posArr = posAttr.array;
+    for (let i=0;i<VN;i++){
+      const dx=posArr[i*3]-hit.point.x, dy=posArr[i*3+1]-hit.point.y, dz=posArr[i*3+2]-hit.point.z;
+      const d = Math.hypot(dx,dy,dz);
+      if (d<GRAB_RADIUS) grabbedNodes.push({ i, ox:dx, oy:dy, oz:dz });
+    }
   }
 });
 window.addEventListener('pointermove', (e)=>{
@@ -687,16 +755,15 @@ window.addEventListener('pointermove', (e)=>{
   raycaster.setFromCamera(ndc, camera);
   const p = new THREE.Vector3();
   raycaster.ray.intersectPlane(dragPlane, p);
-  if (p) dragPoint.copy(jelly.worldToLocal(p));
+  if (p) dragPoint.copy(p);
 });
 window.addEventListener('pointerup', (e)=>{
-  if (dragging && !moved){
+  if (dragging && !moved && softBody){
     toNDC(e.clientX,e.clientY);
     raycaster.setFromCamera(ndc, camera);
     const hit = raycaster.intersectObject(jelly,false)[0];
     if (hit){
-      const lp = jelly.worldToLocal(hit.point.clone());
-      pokeAt(lp.x,lp.y,lp.z, 3.4);
+      pokeAt(hit.point.x,hit.point.y,hit.point.z, 3.4);
       pokeCount++;
       sfx.poke();
       setStatus(pokeCount===1 ? 'Nice! Try dragging it too.' : 'Jiggling…', 1200);
@@ -705,6 +772,7 @@ window.addEventListener('pointerup', (e)=>{
     setStatus('Jiggling…', 1200);
   }
   dragging = false;
+  grabbedNodes = null;
   controls.enabled = true;
   stage.classList.remove('grabbing');
 });
@@ -715,7 +783,8 @@ function maybeIdle(now){
   if (now<nextIdle) return;
   nextIdle = now + 4500 + Math.random()*4500;
   const ang=Math.random()*Math.PI*2;
-  pokeAt(Math.cos(ang)*0.5, (Math.random()-0.5)*0.4, Math.sin(ang)*0.4, 1.0);
+  const c = liveCentroid();
+  pokeAt(c.x+Math.cos(ang)*0.5, c.y+(Math.random()-0.5)*0.4, c.z+Math.sin(ang)*0.4, 1.0);
 }
 
 // ---------- main loop ----------
@@ -732,19 +801,34 @@ function frame(now){
     shakeVec = new THREE.Vector3(Math.sin(t*Math.PI*2*5)*amp, 0, 0);
   }
 
-  const drag = dragging ? dragPoint : null;
-  const sub=2;
-  for (let i=0;i<sub;i++) stepPhysics(dt/sub, drag, shakeVec ? shakeVec.clone().multiplyScalar(1/sub) : null);
+  // Bullet's own stepSimulation already substeps internally (the second
+  // argument below) -- no need for an outer manual substep loop on top of
+  // that the way the hand-rolled version needed.
+  stepPhysics(dt, dragging, shakeVec);
   maybeIdle(now);
 
+  // Keep the orbit target on the object itself -- it actually falls and
+  // can be picked up and carried now, so a fixed (0,0,0) target would mean
+  // "orbit around the empty spot it started at" once it lands or moves.
+  if (softBody && !dragging){
+    const c = liveCentroid();
+    controls.target.lerp(new THREE.Vector3(c.x,c.y,c.z), 0.06);
+  }
   controls.update();
   renderer.render(scene, camera);
   energyVal.textContent = Math.round(Math.min(100, energySmoothed*110)) + '%';
 }
 
 resize();
-requestAnimationFrame(frame);
-setTimeout(()=> setStatus('No wobbles yet.'), 1200);
+// This build (the same one Three.js's own official softbody example uses --
+// the npm "ammo.js" package turned out to be a rigid-body-only compile with
+// no btSoftBody bindings at all) exposes Ammo as an async factory.
+window.Ammo().then((AmmoLibResolved)=>{
+  AmmoLib = AmmoLibResolved;
+  startPhysics();
+  requestAnimationFrame(frame);
+  setTimeout(()=> setStatus('No wobbles yet.'), 1200);
+});
 </script>
 </body>
 </html>

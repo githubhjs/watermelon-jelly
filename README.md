@@ -8,10 +8,13 @@ CDN `<script type="importmap">`, no build step, no bundler.
 
 ## What it does
 
-- A real 3D soft-body physics simulation deforms a rounded wedge mesh — a genuine watermelon-slice
-  cross-section (a curved rind arc tapering to a rounded tip, built as a `THREE.Shape`) extruded
-  into a prism with `THREE.ExtrudeGeometry` — drag the jelly and the mesh stretches toward your
-  pointer; let go and it springs back home. Tap/click without dragging to poke it instead.
+- A real 3D soft-body physics simulation (Ammo.js/Bullet `btSoftBody`, running in WASM) deforms a
+  rounded wedge mesh — a genuine watermelon-slice cross-section (a curved rind arc tapering to a
+  rounded tip, built as a `THREE.Shape`) extruded into a prism with `THREE.ExtrudeGeometry`. It
+  falls under real gravity and lands/settles on a physical plate (a static rigid body) on its own —
+  there's no scripted "resting pose," it topples and comes to rest the way an actual soft object
+  would. Grab the jelly and carry it around; let go and gravity + its own squishiness take back
+  over. Tap/click without dragging to poke it instead.
 - Watermelon coloring (green skin, white rind, red/pink/orange flesh) is painted per-vertex from
   each vertex's position relative to the wedge's own 2D cross-section outline, not a texture — it
   deforms naturally with the jelly since it's baked into the mesh data itself.
@@ -34,10 +37,19 @@ CDN `<script type="importmap">`, no build step, no bundler.
 - Official Three.js addons: `OrbitControls`, `BufferGeometryUtils` (`mergeVertices`, so the
   extruded wedge shares vertices across faces instead of duplicating them per-face — required for
   the jelly deformation to look continuous instead of seamed), and `RoomEnvironment` for the
-  lighting environment.
-- The jelly physics itself (structural distance constraints between mesh edges + a per-vertex pull
-  back toward its own rest position, with damping) is hand-written — there isn't a drop-in
-  "jelly" package for this, but the technique is a standard, well-known one for squishy meshes.
+  lighting environment. Also `three-subdivide` (`LoopSubdivision`) for one smoothing pass that
+  rounds the low-poly extrusion into a plumper, jelly-like shape.
+- Physics: [Ammo.js](https://github.com/kripken/ammo.js) (Bullet physics compiled to WASM), the
+  same build Three.js's own official `physics_ammo_volume.html` example uses — a `btSoftBody` per
+  mesh vertex (1:1, since the geometry is already a single welded indexed mesh), plus a static
+  rigid-body ground/plate. Per frame, `physicsWorld.stepSimulation()` runs and the resulting node
+  positions are copied back into the mesh's `BufferGeometry`. Dragging captures a fixed offset from
+  the grab point for every node once, at grab-start, and moves them rigidly together each frame
+  (not re-pulled toward a moving target, which clumps the mesh instead of carrying its shape).
+  Shape retention relies on angular/linear link stiffness (`kAST`/`kLST`) plus a small constant
+  internal pressure (`kPR`) — just enough to keep the shell from caving in under gravity, since
+  this build's soft bodies are surface-only (no internal volume elements) and don't expose
+  pose-matching (`setPose`) in its JS bindings.
 
 ## Running locally
 
